@@ -14,6 +14,8 @@ const ui = {
     modalTitle: document.getElementById('modalTitle'),
     toastContainer: document.getElementById('toastContainer'),
     formTemplate: document.getElementById('monitor-form-template'),
+    notificationPanel: document.getElementById('notificationSettings'),
+    notificationToggleButton: document.getElementById('toggleNotificationSettingsBtn'),
 };
 
 const summaryOutputs = {
@@ -26,13 +28,21 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
     // Required DOM anchors are missing; bail out gracefully.
     console.warn('[frontend] Required DOM nodes not found. Frontend logic aborted.');
 } else {
+    const urlParams = new URLSearchParams(window.location.search);
     const state = {
         monitors: [],
         loading: false,
         offline: !navigator.onLine,
         refreshTimer: null,
         deferredPrompt: null,
+        focusTargetId: urlParams.get('vps'),
     };
+
+    if ('history' in window && typeof window.history.replaceState === 'function' && state.focusTargetId) {
+        const cleanUrl = new URL(window.location.href);
+        cleanUrl.searchParams.delete('vps');
+        window.history.replaceState({}, document.title, cleanUrl.toString());
+    }
 
     let bannerTimeoutId = null;
 
@@ -162,6 +172,22 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
         ui.monitorList.append(container);
     }
 
+    function focusMonitorCard(vpsId) {
+        if (!ui.monitorList || !vpsId) {
+            return;
+        }
+        const targetCard = ui.monitorList.querySelector(`[data-monitor-id="${vpsId}"]`);
+        if (targetCard) {
+            requestAnimationFrame(() => {
+                targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                targetCard.classList.add('monitor-card--highlight');
+                window.setTimeout(() => {
+                    targetCard.classList.remove('monitor-card--highlight');
+                }, 3200);
+            });
+        }
+    }
+
     function normalizeMonitor(item) {
         if (!item) {
             return null;
@@ -251,6 +277,9 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
         state.monitors = normalized;
         updateSummary(state.monitors);
         renderMonitors();
+        if (typeof notificationManager !== 'undefined' && notificationManager.checkExpiringVPS) {
+            notificationManager.checkExpiringVPS(state.monitors);
+        }
     }
 
     function renderMonitors() {
@@ -268,6 +297,10 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
             fragment.appendChild(card);
         });
         ui.monitorList.appendChild(fragment);
+        if (state.focusTargetId) {
+            focusMonitorCard(state.focusTargetId);
+            state.focusTargetId = null;
+        }
     }
 
     function buildMonitorCard(item) {
@@ -831,6 +864,18 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
         }
     }
 
+    const notificationManager = createNotificationManager({
+        panelEl: document.getElementById('notificationSettings'),
+        togglePanelBtn: document.getElementById('toggleNotificationSettingsBtn'),
+        permissionStatusEl: document.getElementById('notificationPermissionStatus'),
+        toggleEl: document.getElementById('notificationToggle'),
+        requestPermissionBtn: document.getElementById('requestPermissionBtn'),
+        testNotificationBtn: document.getElementById('testNotificationBtn'),
+        openBrowserSettingsBtn: document.getElementById('openBrowserNotificationSettingsBtn'),
+        supportHintEl: document.getElementById('notificationSupportHint'),
+        showToast,
+    });
+
     function cleanup() {
         if (state.refreshTimer) {
             window.clearInterval(state.refreshTimer);
@@ -958,4 +1003,320 @@ function createModalManager({ modal, overlay, titleEl, bodyEl }) {
     });
 
     return { open, close };
+}
+
+function createNotificationManager({
+    panelEl,
+    togglePanelBtn,
+    permissionStatusEl,
+    toggleEl,
+    requestPermissionBtn,
+    testNotificationBtn,
+    openBrowserSettingsBtn,
+    supportHintEl,
+    showToast,
+}) {
+    const STORAGE_KEY_ENABLED = 'pwa-notifications-enabled';
+    const STORAGE_KEY_CHECKED_EXPIRY = 'pwa-notifications-checked-expiry';
+
+    let enabled = localStorage.getItem(STORAGE_KEY_ENABLED) === 'true';
+    let lastCheckedExpiry = new Set();
+
+    try {
+        const stored = localStorage.getItem(STORAGE_KEY_CHECKED_EXPIRY);
+        if (stored) {
+            lastCheckedExpiry = new Set(JSON.parse(stored));
+        }
+    } catch (error) {
+        console.warn('[notifications] Failed to parse checked expiry list:', error);
+    }
+
+    function isNotificationSupported() {
+        return 'Notification' in window && 'serviceWorker' in navigator;
+    }
+
+    function getPermissionStatus() {
+        if (!isNotificationSupported()) {
+            return 'unsupported';
+        }
+        return Notification.permission;
+    }
+
+    function updatePermissionStatusUI() {
+        if (!permissionStatusEl) {
+            return;
+        }
+        const status = getPermissionStatus();
+        let text = '不支持';
+        let state = 'default';
+
+        if (status === 'granted') {
+            text = '已授权 ✓';
+            state = 'granted';
+        } else if (status === 'denied') {
+            text = '已拒绝 ✗';
+            state = 'denied';
+        } else if (status === 'default') {
+            text = '未请求';
+            state = 'default';
+        } else {
+            text = '不支持';
+            state = 'default';
+        }
+
+        permissionStatusEl.textContent = text;
+        permissionStatusEl.setAttribute('data-state', state);
+    }
+
+    function updateUI() {
+        updatePermissionStatusUI();
+
+        if (toggleEl) {
+            toggleEl.checked = enabled;
+            toggleEl.disabled = getPermissionStatus() !== 'granted';
+        }
+
+        if (requestPermissionBtn) {
+            const status = getPermissionStatus();
+            requestPermissionBtn.disabled = status === 'granted' || status === 'denied' || status === 'unsupported';
+        }
+
+        if (testNotificationBtn) {
+            testNotificationBtn.disabled = !enabled || getPermissionStatus() !== 'granted';
+        }
+
+        if (supportHintEl) {
+            if (!isNotificationSupported()) {
+                supportHintEl.textContent = '您的浏览器不支持通知功能。请使用现代浏览器（Chrome、Edge、Firefox）。';
+            } else if (getPermissionStatus() === 'denied') {
+                supportHintEl.textContent = '您已拒绝通知权限。如需启用，请在浏览器设置中允许通知。';
+            } else {
+                supportHintEl.textContent = '';
+            }
+        }
+    }
+
+    async function requestPermission() {
+        if (!isNotificationSupported()) {
+            if (showToast) {
+                showToast('您的浏览器不支持通知功能。', 'error');
+            }
+            return false;
+        }
+
+        if (getPermissionStatus() === 'denied') {
+            if (showToast) {
+                showToast('通知权限已被拒绝，请在浏览器设置中允许。', 'error');
+            }
+            return false;
+        }
+
+        try {
+            const result = await Notification.requestPermission();
+            updateUI();
+
+            if (result === 'granted') {
+                if (showToast) {
+                    showToast('通知权限已授予！', 'success');
+                }
+                setEnabled(true);
+                return true;
+            } else if (result === 'denied') {
+                if (showToast) {
+                    showToast('通知权限被拒绝。', 'error');
+                }
+                return false;
+            } else {
+                if (showToast) {
+                    showToast('通知权限请求已取消。', 'info');
+                }
+                return false;
+            }
+        } catch (error) {
+            console.error('[notifications] Failed to request permission:', error);
+            if (showToast) {
+                showToast('请求通知权限失败。', 'error');
+            }
+            return false;
+        }
+    }
+
+    function setEnabled(value) {
+        enabled = Boolean(value);
+        localStorage.setItem(STORAGE_KEY_ENABLED, String(enabled));
+        updateUI();
+    }
+
+    async function showNotification(title, options = {}) {
+        if (!enabled || getPermissionStatus() !== 'granted') {
+            console.warn('[notifications] Notifications are disabled or permission not granted');
+            return null;
+        }
+
+        try {
+            if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+                navigator.serviceWorker.controller.postMessage({
+                    type: 'SHOW_NOTIFICATION',
+                    title,
+                    options,
+                });
+                return true;
+            } else {
+                const notification = new Notification(title, options);
+                return notification;
+            }
+        } catch (error) {
+            console.error('[notifications] Failed to show notification:', error);
+            return null;
+        }
+    }
+
+    async function testNotification() {
+        if (!enabled) {
+            if (showToast) {
+                showToast('请先启用通知功能。', 'warning');
+            }
+            return;
+        }
+
+        if (getPermissionStatus() !== 'granted') {
+            if (showToast) {
+                showToast('请先授予通知权限。', 'warning');
+            }
+            return;
+        }
+
+        const result = await showNotification('测试通知', {
+            body: '这是一条测试通知，用于验证浏览器通知功能正常工作。',
+            icon: '/icons/app-icon-192.png',
+            badge: '/icons/app-icon-96.png',
+            tag: 'test-notification',
+            requireInteraction: false,
+            data: { type: 'test' },
+        });
+
+        if (result && showToast) {
+            showToast('测试通知已发送！', 'success');
+        }
+    }
+
+    function checkExpiringVPS(monitors) {
+        if (!enabled || getPermissionStatus() !== 'granted') {
+            return;
+        }
+
+        if (!Array.isArray(monitors) || monitors.length === 0) {
+            return;
+        }
+
+        const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+        const now = Date.now();
+        const newChecked = new Set();
+
+        for (const monitor of monitors) {
+            if (!monitor || !monitor.id) {
+                continue;
+            }
+
+            const monitorKey = `${monitor.id}`;
+            newChecked.add(monitorKey);
+
+            if (lastCheckedExpiry.has(monitorKey)) {
+                continue;
+            }
+
+            const expiryDate = monitor.expiryIso ? new Date(monitor.expiryIso) : null;
+            if (!expiryDate || isNaN(expiryDate.getTime())) {
+                continue;
+            }
+
+            const diffMs = expiryDate.getTime() - now;
+            const diffDays = diffMs / ONE_DAY_MS;
+
+            const cookieAbnormal = monitor.rawState === 0 || monitor.rawState === '0';
+
+            if (diffDays > 0 && diffDays <= 3) {
+                const daysText = Math.ceil(diffDays) === 1 ? '1 天' : `${Math.ceil(diffDays)} 天`;
+                showNotification(`VPS 即将到期 - ${monitor.name || '未命名'}`, {
+                    body: `您的 ${monitor.ops?.toUpperCase() || '未知'} VPS 将在 ${daysText} 后到期（${monitor.expiryDisplay || ''}）。请及时续期。`,
+                    icon: '/icons/app-icon-192.png',
+                    badge: '/icons/app-icon-96.png',
+                    tag: `expiry-${monitor.id}`,
+                    requireInteraction: true,
+                    data: { type: 'expiry', vpsId: monitor.id },
+                });
+            } else if (cookieAbnormal) {
+                showNotification(`Cookie 异常 - ${monitor.name || '未命名'}`, {
+                    body: `您的 ${monitor.ops?.toUpperCase() || '未知'} VPS 的 Cookie 状态异常，可能需要更新。`,
+                    icon: '/icons/app-icon-192.png',
+                    badge: '/icons/app-icon-96.png',
+                    tag: `cookie-${monitor.id}`,
+                    requireInteraction: false,
+                    data: { type: 'cookie-failure', vpsId: monitor.id },
+                });
+            }
+        }
+
+        lastCheckedExpiry = newChecked;
+        try {
+            localStorage.setItem(STORAGE_KEY_CHECKED_EXPIRY, JSON.stringify(Array.from(lastCheckedExpiry)));
+        } catch (error) {
+            console.warn('[notifications] Failed to save checked expiry list:', error);
+        }
+    }
+
+    function togglePanel() {
+        if (!panelEl) {
+            return;
+        }
+        const isHidden = panelEl.classList.contains('hidden');
+        if (isHidden) {
+            panelEl.classList.remove('hidden');
+        } else {
+            panelEl.classList.add('hidden');
+        }
+    }
+
+    if (togglePanelBtn) {
+        togglePanelBtn.addEventListener('click', togglePanel);
+    }
+
+    if (requestPermissionBtn) {
+        requestPermissionBtn.addEventListener('click', requestPermission);
+    }
+
+    if (testNotificationBtn) {
+        testNotificationBtn.addEventListener('click', testNotification);
+    }
+
+    if (toggleEl) {
+        toggleEl.addEventListener('change', (event) => {
+            setEnabled(event.target.checked);
+            if (enabled && showToast) {
+                showToast('通知功能已启用。', 'success');
+            } else if (showToast) {
+                showToast('通知功能已禁用。', 'info');
+            }
+        });
+    }
+
+    if (openBrowserSettingsBtn) {
+        openBrowserSettingsBtn.addEventListener('click', () => {
+            if (showToast) {
+                showToast('请在浏览器地址栏点击锁图标，进入"网站设置"管理通知权限。', 'info', { duration: 6000 });
+            }
+        });
+    }
+
+    updateUI();
+
+    return {
+        isSupported: isNotificationSupported,
+        getPermission: getPermissionStatus,
+        requestPermission,
+        showNotification,
+        checkExpiringVPS,
+        isEnabled: () => enabled,
+        updateUI,
+    };
 }

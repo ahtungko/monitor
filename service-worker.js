@@ -1,4 +1,4 @@
-const VERSION = 'pwa-v1.1.0';
+const VERSION = 'pwa-v1.2.0';
 const PRECACHE = `precache-${VERSION}`;
 const RUNTIME = `runtime-${VERSION}`;
 
@@ -126,4 +126,42 @@ self.addEventListener('fetch', (event) => {
       .then((response) => stashRuntimeResponse(request, response))
       .catch(() => caches.match(request))
   );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const vpsId = event.notification.data?.vpsId;
+  const urlToOpen = vpsId ? `/?vps=${vpsId}` : '/';
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true })
+      .then((clientList) => {
+        for (const client of clientList) {
+          if (client.url.includes(self.location.origin) && 'focus' in client) {
+            return client.focus().then(() => {
+              if ('navigate' in client) {
+                return client.navigate(urlToOpen);
+              }
+            });
+          }
+        }
+        if (clients.openWindow) {
+          return clients.openWindow(urlToOpen);
+        }
+      })
+  );
+});
+
+self.addEventListener('notificationclose', (event) => {
+  console.log('[service-worker] Notification closed:', event.notification.tag);
+});
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SHOW_NOTIFICATION') {
+    const { title, options } = event.data;
+    if (title && self.registration && self.registration.showNotification) {
+      event.waitUntil(
+        self.registration.showNotification(title, options)
+      );
+    }
+  }
 });
