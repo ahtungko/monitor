@@ -315,9 +315,43 @@ def selectAllInfo_Info():
     return {'msg': data}
 
 
-def selectVPSForId(id):
-    res = selectSql_VPS_ID(id)
-    return {'msg': res}
+def selectVPSForId(id_value):
+    try:
+        rows = selectSql_VPS_ID(id_value)
+    except Exception as exc:
+        logger.exception('Failed to query monitor details for id %s: %s', id_value, exc)
+        raise
+
+    normalized = []
+    for row in rows or []:
+        if row is None:
+            continue
+        if hasattr(row, 'keys') and hasattr(row, '__getitem__'):
+            normalized.append([row[key] for key in row.keys()])
+            continue
+        if isinstance(row, dict):
+            ordered_keys = [
+                'id',
+                'name',
+                'ops',
+                'cookie',
+                'creation_date',
+                'valid_until',
+                'location',
+                'ipv6',
+                'ram',
+                'disk_total',
+                'update_time',
+                'state',
+                'expiry_utc',
+            ]
+            normalized.append([row.get(key) for key in ordered_keys])
+            continue
+        if isinstance(row, (list, tuple)):
+            normalized.append(list(row))
+            continue
+        normalized.append([row])
+    return {'msg': normalized}
 
 
 def deleteVPS(id):
