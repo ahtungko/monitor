@@ -1,126 +1,292 @@
 # -*- coding: utf-8 -*-
-import requests, datetime, pytz
+import datetime
+import logging
+import time
+from typing import Any, Dict, Optional, Tuple
+
+import requests
 from bs4 import BeautifulSoup
+
 from sql import *
 from send import *
+
+
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter('[%(asctime)s] %(levelname)s %(name)s: %(message)s'))
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+logger.propagate = False
+
+STATE_ABNORMAL = 0
+STATE_NORMAL = 1
+STATE_PENDING = 2
+
+REQUEST_TIMEOUT = 15
+REQUEST_MAX_ATTEMPTS = 3
+REQUEST_RETRY_DELAY = 2
+INITIAL_WARMUP_SECONDS = 3
+
+NEW_ENTRY_FAILURE_THRESHOLD = 3
+EXISTING_FAILURE_THRESHOLD = 2
+
+REQUIRED_LABELS = (
+    'VPS Creation Date',
+    'Valid until',
+    'IPv6',
+    'Location',
+    'Total disk space',
+    'Ram',
+)
+ESSENTIAL_KEYS = ('VPS Creation Date', 'Valid until')
+
+PROVIDER_CONFIGS = {
+    'hax': {
+        'label': 'Hax',
+        'url': 'https://hax.co.id/vps-info/',
+        'headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36',
+        },
+        'cookie_header': 'Cookie',
+    },
+    'woiden': {
+        'label': 'Woiden',
+        'url': 'https://woiden.id/vps-info/',
+        'headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36',
+        },
+        'cookie_header': 'Cookie',
+    },
+    'vc': {
+        'label': 'VC',
+        'url': 'https://free.vps.vc/vps-info',
+        'headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+            'Referer': 'https://free.vps.vc/',
+        },
+        'cookie_header': 'Cookie',
+    },
+}
+
+_status_tracker: Dict[int, Dict[str, Any]] = {}
+
+
+def _now_utc() -> datetime.datetime:
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def _ensure_tracker(vps_id: int, initial_state: Optional[int] = None) -> Dict[str, Any]:
+    entry = _status_tracker.get(vps_id)
+    if entry is None:
+        entry = {
+            'consecutive_failures': 0,
+            'consecutive_successes': 0,
+            'last_applied_state': initial_state,
+            'last_success_at': None,
+            'first_seen_at': _now_utc(),
+            'last_error': None,
+            'last_checked_at': None,
+        }
+        _status_tracker[vps_id] = entry
+    elif entry.get('last_applied_state') is None and initial_state is not None:
+        entry['last_applied_state'] = initial_state
+    return entry
+
+
+def _cleanup_tracker(active_ids):
+    stale_ids = [vid for vid in _status_tracker.keys() if vid not in active_ids]
+    for vid in stale_ids:
+        _status_tracker.pop(vid, None)
+
+
+def _is_new_vps(vps, entry: Dict[str, Any]) -> bool:
+    update_time = vps['update_time']
+    if update_time:
+        return False
+    return entry.get('last_success_at') is None
+
+
+def _should_skip_initial_warmup(vps, entry: Dict[str, Any]) -> float:
+    if not _is_new_vps(vps, entry):
+        return 0.0
+    first_seen = entry.get('first_seen_at') or _now_utc()
+    entry['first_seen_at'] = first_seen
+    elapsed = (_now_utc() - first_seen).total_seconds()
+    remaining = INITIAL_WARMUP_SECONDS - elapsed
+    if remaining > 0:
+        return remaining
+    return 0.0
+
+
+def _build_headers(config: Dict[str, Any], vps) -> Dict[str, str]:
+    headers = dict(config.get('headers') or {})
+    cookie_header = config.get('cookie_header', 'Cookie')
+    headers[cookie_header] = str(vps['cookie'] or '')
+    return headers
+
+
+def _fetch_provider_page(url: str, headers: Dict[str, str], provider_label: str) -> str:
+    last_error: Optional[Exception] = None
+    for attempt in range(1, REQUEST_MAX_ATTEMPTS + 1):
+        try:
+            response = requests.get(url=url, headers=headers, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            return response.text
+        except requests.RequestException as exc:
+            last_error = exc
+            logger.warning('[%s] Request attempt %s failed: %s', provider_label, attempt, exc)
+            if attempt < REQUEST_MAX_ATTEMPTS:
+                time.sleep(REQUEST_RETRY_DELAY)
+    if last_error:
+        raise last_error
+    raise RuntimeError('Unexpected request failure')
+
+
+def _parse_vps_info(html: str) -> Tuple[Optional[Dict[str, str]], Optional[str]]:
+    soup = BeautifulSoup(html, 'html.parser')
+    if soup is None:
+        return None, 'unable to parse response'
+    keys = soup.find_all('label', {'class': 'col-sm-5 col-form-label'})
+    values = soup.find_all('div', {'class': 'col-sm-7'})
+    info: Dict[str, str] = {}
+    for key_el, value_el in zip(keys, values):
+        label = key_el.get_text(strip=True)
+        if label in REQUIRED_LABELS:
+            info[label] = value_el.get_text(strip=True)
+    has_required = all(info.get(field) for field in ESSENTIAL_KEYS)
+    if has_required:
+        return info, None
+    html_lower = html.lower()
+    if soup.find('form', {'id': 'loginform'}) or 'loginform' in html_lower:
+        return None, 'login form detected, cookie may be expired'
+    if soup.find('input', {'name': 'log'}) or soup.find('input', {'name': 'pwd'}):
+        return None, 'authentication page detected'
+    return None, 'required VPS fields missing'
+
+
+def _mark_success(vps_id: int, provider_label: str, entry: Dict[str, Any]):
+    previous_state = entry.get('last_applied_state')
+    entry['consecutive_failures'] = 0
+    entry['consecutive_successes'] = entry.get('consecutive_successes', 0) + 1
+    entry['last_success_at'] = _now_utc()
+    entry['last_error'] = None
+    entry['last_applied_state'] = STATE_NORMAL
+    if previous_state != STATE_NORMAL:
+        logger.info('[%s] VPS %s marked as normal', provider_label, vps_id)
+    else:
+        logger.debug('[%s] VPS %s check succeeded (state unchanged)', provider_label, vps_id)
+
+
+def _persist_success(vps, config: Dict[str, Any], entry: Dict[str, Any], info: Dict[str, str]):
+    vps_id = vps['id']
+    provider_label = config['label']
+    creation_date = info.get('VPS Creation Date') or ''
+    valid_until = info.get('Valid until') or ''
+    location = info.get('Location') or ''
+    ipv6 = info.get('IPv6') or ''
+    ram = info.get('Ram') or ''
+    disk_total = info.get('Total disk space') or ''
+    try:
+        updateInfoSql(creation_date, valid_until, location, ipv6, ram, disk_total, vps_id)
+    except Exception as exc:
+        logger.exception('[%s] Failed to persist info for VPS %s: %s', provider_label, vps_id, exc)
+        try:
+            updateState(STATE_NORMAL, vps_id)
+        except Exception:
+            logger.exception('[%s] Failed to set VPS %s state to normal after persistence error', provider_label, vps_id)
+    _mark_success(vps_id, provider_label, entry)
+
+
+def _record_failure(vps, config: Dict[str, Any], entry: Dict[str, Any], reason: str):
+    vps_id = vps['id']
+    provider_label = config['label']
+    entry['consecutive_successes'] = 0
+    entry['consecutive_failures'] = entry.get('consecutive_failures', 0) + 1
+    entry['last_error'] = reason
+    entry['last_checked_at'] = _now_utc()
+    threshold = NEW_ENTRY_FAILURE_THRESHOLD if _is_new_vps(vps, entry) else EXISTING_FAILURE_THRESHOLD
+    attempts = entry['consecutive_failures']
+    if attempts < threshold:
+        logger.info('[%s] VPS %s check failed (%s) — attempt %s/%s (debounced)', provider_label, vps_id, reason, attempts, threshold)
+        return
+    if entry.get('last_applied_state') == STATE_ABNORMAL:
+        logger.debug('[%s] VPS %s remains abnormal (%s)', provider_label, vps_id, reason)
+        return
+    try:
+        updateState(STATE_ABNORMAL, vps_id)
+    except Exception as exc:
+        logger.exception('[%s] Failed to mark VPS %s as abnormal: %s', provider_label, vps_id, exc)
+        return
+    entry['last_applied_state'] = STATE_ABNORMAL
+    logger.warning('[%s] VPS %s marked as abnormal after %s consecutive failures: %s', provider_label, vps_id, attempts, reason)
+
+
+def _check_single_vps(vps, config: Dict[str, Any], entry: Dict[str, Any]):
+    vps_id = vps['id']
+    provider_label = config['label']
+    warmup_remaining = _should_skip_initial_warmup(vps, entry)
+    if warmup_remaining > 0:
+        logger.debug('[%s] VPS %s warmup in progress (%.1fs remaining)', provider_label, vps_id, warmup_remaining)
+        return
+    headers = _build_headers(config, vps)
+    try:
+        html = _fetch_provider_page(config['url'], headers, provider_label)
+    except requests.RequestException as exc:
+        _record_failure(vps, config, entry, f'{exc.__class__.__name__}: {exc}')
+        return
+    if not html or not html.strip():
+        _record_failure(vps, config, entry, 'empty response body')
+        return
+    info, error = _parse_vps_info(html)
+    if info:
+        _persist_success(vps, config, entry, info)
+    else:
+        _record_failure(vps, config, entry, error or 'unable to parse response')
+
 
 def addVps(obj):
     addSql(obj['name'], obj['ops'], obj['cookie'])
 
+
 def CheckVPS():
-    try:
-        for vps in selectSql():
-            if str(vps[2]) == 'hax':
-                checkHaxInfo(vps)
-            elif str(vps[2]) == 'woiden':
-                checkWoidenInfo(vps)
-            elif str(vps[2]) == 'vc':
-                checkVCInfo(vps)
-            else:
-                print('无法识别的母鸡')
-    except:
-        print('无监控信息')
-def checkHaxInfo(vps):
-    url = 'https://hax.co.id/vps-info/'
-    headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36',
-    'Cookie': str(vps[3]),
-    }
-    resp = requests.get(url=url, headers=headers)
-    html_content = resp.content.decode('UTF-8')
-    try:
-        soup = BeautifulSoup(html_content, 'html.parser')
-        meta = soup.find('meta')
-        if str(meta) == '<meta charset="utf-8"/>':
-            key = soup.find_all('label', {'class':'col-sm-5 col-form-label'})
-            val = soup.find_all('div', {'class':'col-sm-7'})
-            info = {}
-            for k, v in zip(key, val):
-                if k.text in ['VPS Creation Date','Valid until',"IPv6","Location","Total disk space","Ram"]:
-                    info.update({k.text:str(v.text).strip()})
-            try:
-                updateInfoSql(info['VPS Creation Date'], info['Valid until'], info["Location"],info["IPv6"],info["Ram"],info["Total disk space"],vps[0])
-            except Exception as e:
-                updateState(1, vps[0])
-                pass
-        else:
-            updateState(0, vps[0])
-            print('cookie已过期')
-            pass
-    except:
-        # print('网络异常，请求失败')
-        pass
-def checkWoidenInfo(vps):
-    url = 'https://woiden.id/vps-info/'
-    headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36',
-    'Cookie': str(vps[3]),
-    }
-    resp = requests.get(url=url, headers=headers)
-    html_content = resp.content.decode('UTF-8')
-    try:
-        soup = BeautifulSoup(html_content, 'html.parser')
-        meta = soup.find('meta')
-        if str(meta) == '<meta charset="utf-8"/>':
-            key = soup.find_all('label', {'class':'col-sm-5 col-form-label'})
-            val = soup.find_all('div', {'class':'col-sm-7'})
-            info = {}
-            for k, v in zip(key, val):
-                if k.text in ['VPS Creation Date','Valid until',"IPv6","Location","Total disk space","Ram"]:
-                    info.update({k.text:str(v.text).strip()})
-            try:
-                # print('success')
-                updateInfoSql(info['VPS Creation Date'], info['Valid until'], info["Location"],info["IPv6"],info["Ram"],info["Total disk space"],vps[0])
-            except Exception as e:
-                updateState(1, vps[0])
-                pass
-        else:
-            updateState(0, vps[0])
-            pass
-            # print('cookie已过期')
-    except Exception  as e:
-        # print(e)
-        pass
-        # print('网络异常，请求失败')
-    
-def checkVCInfo(vps):
-    url = 'https://free.vps.vc/vps-info'
-    headers = {
-    "cookie": str(vps[3]),
-    "referer": "https://free.vps.vc/",
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
-    }
-    resp = requests.get(url=url, headers=headers)
-    html_content = resp.content.decode('UTF-8')
-    try:
-        soup = BeautifulSoup(html_content, 'html.parser')
-        meta = soup.find('meta')
-        if str(meta) == '<meta charset="utf-8"/>':
-            key = soup.find_all('label', {'class':'col-sm-5 col-form-label'})
-            val = soup.find_all('div', {'class':'col-sm-7'})
-            info = {}
-            for k, v in zip(key, val):
-                if k.text in ['VPS Creation Date','Valid until',"IPv6","Location","Total disk space","Ram"]:
-                    info.update({k.text:str(v.text).strip()})
-            try:
-                updateInfoSql(info['VPS Creation Date'], info['Valid until'], info["Location"],info["IPv6"],info["Ram"],info["Total disk space"],vps[0])
-            except Exception as e:
-                updateState(1, vps[0])
-                pass
-        else:
-            updateState(0, vps[0])
-            # print(soup)
-            # print('cookie已过期')
-            pass
-    except:
-        # print('网络异常，请求失败')
-        pass
+    vps_list = selectSql()
+    if not vps_list:
+        logger.debug('No VPS records found for monitoring.')
+        _cleanup_tracker(set())
+        return
+    active_ids = set()
+    for vps in vps_list:
+        try:
+            vps_id = vps['id']
+        except (TypeError, KeyError, IndexError):
+            logger.warning('Skipping malformed VPS record: %s', vps)
+            continue
+        active_ids.add(vps_id)
+        provider_key = str(vps['ops'] or '').strip().lower()
+        if not provider_key:
+            logger.warning('VPS ID %s has no provider configured.', vps_id)
+            continue
+        config = PROVIDER_CONFIGS.get(provider_key)
+        if not config:
+            logger.warning('Unable to recognise provider "%s" for VPS ID %s', provider_key, vps_id)
+            continue
+        entry = _ensure_tracker(vps_id, vps['state'])
+        try:
+            _check_single_vps(vps, config, entry)
+        except Exception as exc:
+            logger.exception('[%s] Unexpected error while checking VPS %s: %s', config['label'], vps_id, exc)
+    _cleanup_tracker(active_ids)
+
+
 def selectAllInfo():
     res = selectSql()
     if res == []:
-        return {'msg' : None}
+        return {'msg': None}
     else:
-        return{'msg': res}
+        return {'msg': res}
+
+
 def selectAllInfo_Info():
     res = selectSql()
     if not res:
@@ -147,21 +313,28 @@ def selectAllInfo_Info():
             )
         )
     return {'msg': data}
+
+
 def selectVPSForId(id):
     res = selectSql_VPS_ID(id)
     return {'msg': res}
+
+
 def deleteVPS(id):
     try:
         deleteVps(id)
-        return{'msg': '删除成功'}
+        return {'msg': '删除成功'}
     except Exception as e:
-        return{'msg': f'删除失败,{e}'}
+        return {'msg': f'删除失败,{e}'}
+
+
 def updateVPS(list):
     try:
         updateVps(list[1], list[2], list[3], list[0])
-        return{'msg':f'修改成功'}
+        return {'msg': f'修改成功'}
     except Exception as e:
-        return{'msg':f'修改失败{e}'}
+        return {'msg': f'修改失败{e}'}
+
 
 def checkDateTime():
     res = selectSql()
