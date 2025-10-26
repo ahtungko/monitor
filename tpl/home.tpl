@@ -25,6 +25,9 @@
                 <p class="app-shell__subtitle">集中查看监控实例状态，管理续期提醒。</p>
             </div>
             <div class="app-shell__controls actions" role="group" aria-label="监控操作">
+                <button id="toggleNotificationSettingsBtn" class="ghost-btn" type="button" aria-label="通知设置">
+                    <span aria-hidden="true">🔔</span> 通知
+                </button>
                 <button id="openAddBtn" class="primary-btn" type="button">添加监控</button>
                 <button id="installBtn" class="install-btn hidden" type="button">安装应用</button>
             </div>
@@ -47,6 +50,31 @@
                 <output class="metric-card__value" name="healthy-cookies" data-summary-value>--</output>
                 <p class="metric-card__hint">状态良好的 Cookie 数量。</p>
             </article>
+        </section>
+
+        <section id="notificationSettings" class="notification-settings hidden" aria-labelledby="notificationSettingsTitle">
+            <h2 id="notificationSettingsTitle" class="notification-settings__title">通知设置</h2>
+            <div class="notification-settings__content">
+                <div class="notification-settings__status">
+                    <div class="notification-status">
+                        <span class="notification-status__label">浏览器通知权限：</span>
+                        <span id="notificationPermissionStatus" class="notification-status__value">检查中...</span>
+                    </div>
+                    <div class="notification-status">
+                        <span class="notification-status__label">通知开关：</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="notificationToggle" aria-label="启用或禁用通知">
+                            <span class="toggle-switch__slider"></span>
+                        </label>
+                    </div>
+                </div>
+                <div class="notification-settings__actions">
+                    <button id="requestPermissionBtn" class="secondary-btn" type="button">请求通知权限</button>
+                    <button id="testNotificationBtn" class="secondary-btn" type="button">测试通知</button>
+                    <button id="openBrowserNotificationSettingsBtn" class="ghost-btn" type="button">浏览器通知设置</button>
+                </div>
+                <p class="notification-settings__hint" id="notificationSupportHint"></p>
+            </div>
         </section>
 
         <main id="mainContent" class="app-shell__main" tabindex="-1">
