@@ -60,6 +60,12 @@
   nohup python3 -u main.py > monitor.log 2>&1 &
   ```
 
-```
+## PWA 使用说明
 
-```
+- 网页端现已支持 Progressive Web App，可通过浏览器地址栏的安装提示或页面中的“安装应用”按钮，将监控面板安装到桌面。
+- `manifest.json` 位于项目根目录，新的图标资源存放在 `static/icons/`，核心脚本/样式位于 `static/js/` 与 `static/css/`。
+- `service-worker.js` 会在访问首页时注册：
+  - 预缓存首页、CSS、JavaScript、背景图以及所有图标，确保在离线状态下仍可以打开基础界面；
+  - 对 `/select` 等数据接口采用 network-first 策略，无法联网时自动回退到缓存数据并在页面顶部显示离线提示。
+- 开发调试时，如修改了前端资源或 service worker，请在浏览器 DevTools 中执行 **Hard Reload + Clear Storage** 或注销旧的 service worker 以便加载最新缓存。
+- 启动方式与此前一致，运行 `python3 main.py` 即会同时提供 PWA 资源。部署后建议使用 Chrome DevTools → Lighthouse → **Progressive Web App** 检查项，自检是否满足 *Installable* 与 *Offline capable* 要求。

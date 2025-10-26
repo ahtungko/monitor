@@ -2,6 +2,7 @@
 from bottle import route, run, template, debug, request, static_file
 from add import *
 import threading, time, sys, signal
+from pathlib import Path
 
 should_stop_checking = False
 def check_vps():
@@ -25,14 +26,58 @@ def thread_check(signal_handler):
 
 thread_check(signal_handler)
 
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_ROOT = BASE_DIR / 'static'
+
+CACHE_ONE_DAY = 24 * 60 * 60
+CACHE_ONE_WEEK = 7 * CACHE_ONE_DAY
+
+
+def add_cache_headers(resp, max_age=CACHE_ONE_DAY):
+    if resp:
+        resp.set_header('Cache-Control', f'public, max-age={max_age}')
+    return resp
+
+
+def no_store(resp):
+    if resp:
+        resp.set_header('Cache-Control', 'no-store')
+    return resp
+
+
 debug(True)
 @route('/')
 def home():
     return template('tpl/home.tpl')
 
-@route('/css/<fname>', method = 'GET')
-def home(fname):
-    return static_file(fname, root='tpl/css')
+@route('/css/<filepath:path>', method='GET')
+def serve_css(filepath):
+    resp = static_file(filepath, root=str(STATIC_ROOT / 'css'))
+    return add_cache_headers(resp, CACHE_ONE_WEEK)
+
+@route('/js/<filepath:path>', method='GET')
+def serve_js(filepath):
+    resp = static_file(filepath, root=str(STATIC_ROOT / 'js'))
+    return add_cache_headers(resp, CACHE_ONE_WEEK)
+
+@route('/icons/<filepath:path>', method='GET')
+def serve_icons(filepath):
+    resp = static_file(filepath, root=str(STATIC_ROOT / 'icons'))
+    return add_cache_headers(resp, CACHE_ONE_WEEK)
+
+@route('/manifest.json', method='GET')
+def manifest():
+    resp = static_file('manifest.json', root=str(BASE_DIR))
+    if resp:
+        resp.content_type = 'application/manifest+json'
+    return add_cache_headers(resp, CACHE_ONE_DAY)
+
+@route('/service-worker.js', method='GET')
+def service_worker():
+    resp = static_file('service-worker.js', root=str(BASE_DIR))
+    if resp:
+        resp.content_type = 'application/javascript'
+    return no_store(resp)
 
 @route('/add', method = 'POST')
 def add():
