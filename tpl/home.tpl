@@ -11,53 +11,65 @@
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/app-icon-192.png">
     <link rel="apple-touch-icon" href="/icons/app-icon-192.png">
     <link rel="stylesheet" type="text/css" href="/css/home.css">
-    <script src="/js/vendor/jquery-3.6.0.min.js" defer></script>
-    <script src="/js/app.js" defer></script>
 </head>
 
 <body>
     <div id="statusBanner" class="status-banner hidden" role="status" aria-live="polite"></div>
     <div class="box">
-        <h1>小鸡监控系统</h1>
-        <div class="actions">
-            <span class="add_span"><a>添加监控</a></span>
-            <button id="installBtn" class="install-btn hidden" type="button">安装应用</button>
-        </div>
-        <div class="content"></div>
+        <header class="hero">
+            <h1>小鸡监控系统</h1>
+            <div class="actions">
+                <span class="add_span">
+                    <button id="openAddBtn" class="primary-btn" type="button">添加监控</button>
+                </span>
+                <button id="installBtn" class="install-btn hidden" type="button">安装应用</button>
+            </div>
+        </header>
+        <main id="monitorList" class="content monitor-list" data-monitor-list aria-live="polite" aria-busy="false"></main>
     </div>
 
-    <div class="overlay"></div>
-    <!-- 隐藏的添加窗口 -->
-    <div class="add_window">
-        <h2>添加一个监控</h2>
-        <form id="add">
-            <ul>
-                <li>
-                    <label for="ops">选择小鸡站：</label>
-                    <select id="ops" name="ops">
+    <div id="modalOverlay" class="modal-overlay hidden"></div>
+    <section id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="modalTitle">
+        <div class="modal__surface" role="document">
+            <header class="modal__header">
+                <h2 id="modalTitle" class="modal__title"></h2>
+                <button type="button" class="modal__close" data-modal-close aria-label="关闭">✕</button>
+            </header>
+            <div id="modalBody" class="modal__body"></div>
+        </div>
+    </section>
+
+    <template id="monitor-form-template">
+        <form class="monitor-form" novalidate>
+            <fieldset class="form-fieldset">
+                <legend class="visually-hidden">监控详情</legend>
+                <div class="form-group">
+                    <label for="monitorOps">选择小鸡站：</label>
+                    <select id="monitorOps" name="ops" required>
                         <option value="hax">Hax</option>
                         <option value="woiden">Woiden</option>
                         <option value="vc">Vc</option>
                     </select>
-                </li>
-                <li>
-                    <label for="cookie">网页Cookie：</label>
-                    <input type="text" id="cookie" name="cookie" required>
-                </li>
-                <li>
-                    <label for="name">设置备注名：</label>
-                    <input type="text" id="name" name="name" required>
-                </li>
-                <li>
-                    <button type="submit">提交</button>
-                    <button type="button" id="close_add">取消</button>
-                </li>
-            </ul>
+                </div>
+                <div class="form-group">
+                    <label for="monitorCookie">网页Cookie：</label>
+                    <input id="monitorCookie" name="cookie" type="text" required autocomplete="off">
+                </div>
+                <div class="form-group">
+                    <label for="monitorName">设置备注名：</label>
+                    <input id="monitorName" name="name" type="text" required autocomplete="off">
+                </div>
+            </fieldset>
+            <div class="modal__actions">
+                <button type="submit" class="primary-btn">提交</button>
+                <button type="button" class="secondary-btn" data-modal-cancel>取消</button>
+            </div>
         </form>
-    </div>
-    <div class="modify_window">
-    </div>
-</body>
+    </template>
 
+    <div id="toastContainer" class="toast-container" role="status" aria-live="assertive"></div>
+
+    <script type="module" src="/js/app.js"></script>
+</body>
 
 </html>

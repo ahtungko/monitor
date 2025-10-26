@@ -1,124 +1,307 @@
-(function () {
-    'use strict';
+const STORAGE_KEY = 'renewal-monitor-cache';
+const REFRESH_INTERVAL = 20000;
+const FETCH_TIMEOUT = 15000;
+const FOCUSABLE_SELECTORS = 'a[href], area[href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-    const addTrigger = document.querySelector('.add_span a');
-    const addWindow = document.querySelector('.add_window');
-    const overlay = document.querySelector('.overlay');
-    const addForm = document.getElementById('add');
-    const closeAddButton = document.getElementById('close_add');
-    const modifyContainer = document.querySelector('.modify_window');
-    const contentEl = document.querySelector('.content');
-    const statusBanner = document.getElementById('statusBanner');
-    const installButton = document.getElementById('installBtn');
+const ui = {
+    monitorList: document.querySelector('[data-monitor-list]'),
+    addButton: document.getElementById('openAddBtn'),
+    installButton: document.getElementById('installBtn'),
+    statusBanner: document.getElementById('statusBanner'),
+    modalOverlay: document.getElementById('modalOverlay'),
+    modal: document.getElementById('modal'),
+    modalBody: document.getElementById('modalBody'),
+    modalTitle: document.getElementById('modalTitle'),
+    toastContainer: document.getElementById('toastContainer'),
+    formTemplate: document.getElementById('monitor-form-template'),
+};
 
-    if (!contentEl) {
-        return;
+if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.modalBody || !ui.modalTitle) {
+    // Required DOM anchors are missing; bail out gracefully.
+    console.warn('[frontend] Required DOM nodes not found. Frontend logic aborted.');
+} else {
+    const state = {
+        monitors: [],
+        loading: false,
+        offline: !navigator.onLine,
+        refreshTimer: null,
+        deferredPrompt: null,
+    };
+
+    let bannerTimeoutId = null;
+
+    const modalManager = createModalManager({
+        modal: ui.modal,
+        overlay: ui.modalOverlay,
+        titleEl: ui.modalTitle,
+        bodyEl: ui.modalBody,
+    });
+
+    function isOnline() {
+        return navigator.onLine;
     }
 
-    const STORAGE_KEY = 'renewal-monitor-cache';
-    const REFRESH_INTERVAL = 20000;
-
-    let activeModal = null;
-    let refreshTimer = null;
-    let deferredPrompt = null;
-    let statusTimeoutId = null;
-
-    const isOnline = () => navigator.onLine;
-
-    function openModal(element) {
-        if (!element) {
+    function setBanner(message, variant = 'info', { persist = false } = {}) {
+        if (!ui.statusBanner) {
             return;
         }
-        closeActiveModal();
-        element.style.display = 'flex';
-        if (overlay) {
-            overlay.style.display = 'block';
+        ui.statusBanner.textContent = message;
+        ui.statusBanner.dataset.state = variant;
+        ui.statusBanner.classList.remove('hidden');
+        if (bannerTimeoutId) {
+            window.clearTimeout(bannerTimeoutId);
+            bannerTimeoutId = null;
         }
-        activeModal = element;
-    }
-
-    function closeActiveModal() {
-        if (activeModal) {
-            activeModal.style.display = 'none';
-            activeModal = null;
-        }
-        if (overlay) {
-            overlay.style.display = 'none';
-        }
-    }
-
-    function hideStatus() {
-        if (!statusBanner) {
-            return;
-        }
-        statusBanner.textContent = '';
-        statusBanner.dataset.state = '';
-        statusBanner.classList.add('hidden');
-    }
-
-    function showStatus(message, state = 'info', { persist = false } = {}) {
-        if (!statusBanner) {
-            return;
-        }
-        statusBanner.textContent = message;
-        statusBanner.dataset.state = state;
-        statusBanner.classList.remove('hidden');
-        if (statusTimeoutId) {
-            window.clearTimeout(statusTimeoutId);
-            statusTimeoutId = null;
-        }
-        if (!persist && state !== 'offline') {
-            statusTimeoutId = window.setTimeout(() => {
-                hideStatus();
-                statusTimeoutId = null;
+        if (!persist) {
+            bannerTimeoutId = window.setTimeout(() => {
+                hideBanner();
+                bannerTimeoutId = null;
             }, 4000);
         }
     }
 
-    function handleOffline(message) {
-        showStatus(message || '网络连接不可用，正在显示缓存内容。', 'offline', { persist: true });
+    function hideBanner() {
+        if (!ui.statusBanner) {
+            return;
+        }
+        if (bannerTimeoutId) {
+            window.clearTimeout(bannerTimeoutId);
+            bannerTimeoutId = null;
+        }
+        ui.statusBanner.textContent = '';
+        ui.statusBanner.dataset.state = '';
+        ui.statusBanner.classList.add('hidden');
     }
 
-    function handleOnline() {
-        showStatus('网络已恢复。', 'success');
+    function showToast(message, variant = 'info', { duration = 4200 } = {}) {
+        if (!ui.toastContainer) {
+            return;
+        }
+        const toast = document.createElement('div');
+        toast.className = `toast toast--${variant}`;
+        toast.setAttribute('role', 'alert');
+        toast.textContent = message;
+        ui.toastContainer.appendChild(toast);
+        requestAnimationFrame(() => {
+            toast.classList.add('toast--visible');
+        });
+        window.setTimeout(() => {
+            toast.classList.remove('toast--visible');
+            toast.addEventListener('transitionend', () => {
+                toast.remove();
+            }, { once: true });
+        }, duration);
     }
 
-    function ckState(state) {
-        let monitorStat = '异常';
-        let monitorColor = 'red';
-        if (state === 1 || state === '1') {
-            monitorStat = '正常';
-            monitorColor = 'green';
+    function setLoading(value) {
+        state.loading = value;
+        if (!ui.monitorList) {
+            return;
         }
-        return [monitorStat, monitorColor];
+        ui.monitorList.setAttribute('aria-busy', String(Boolean(value)));
+        if (value && state.monitors.length === 0) {
+            renderSkeletons();
+        }
     }
 
-    function ckDate(state) {
-        const target = new Date(state);
-        if (Number.isNaN(target.getTime())) {
-            return ['无状态', 'red'];
+    function renderSkeletons() {
+        if (!ui.monitorList) {
+            return;
         }
-        let dt = ((target.getTime() - Date.now()) / 1000).toFixed(2);
-        dt = dt / 3600 / 24;
-        if (dt > 3) {
-            return ['正常', 'green'];
+        ui.monitorList.innerHTML = '';
+        for (let index = 0; index < 3; index += 1) {
+            const card = document.createElement('article');
+            card.className = 'monitor-card monitor-card--skeleton';
+
+            const header = document.createElement('div');
+            header.className = 'monitor-card__header';
+            const titleSkeleton = document.createElement('div');
+            titleSkeleton.className = 'skeleton-line skeleton-line--lg';
+            header.appendChild(titleSkeleton);
+            card.appendChild(header);
+
+            const meta = document.createElement('div');
+            meta.className = 'monitor-card__meta';
+            for (let i = 0; i < 3; i += 1) {
+                const line = document.createElement('div');
+                line.className = 'skeleton-line';
+                meta.appendChild(line);
+            }
+            card.appendChild(meta);
+            ui.monitorList.appendChild(card);
         }
-        if (dt > 0 && dt <= 3) {
-            return ['待续期', 'yellow'];
+    }
+
+    function renderEmpty(message = '未添加监控') {
+        if (!ui.monitorList) {
+            return;
         }
-        if (dt > 10 || dt < 0) {
-            return ['已过期', 'red'];
+        ui.monitorList.innerHTML = '';
+        const container = document.createElement('div');
+        container.className = 'empty-state';
+
+        const title = document.createElement('p');
+        title.className = 'empty-state__title';
+        title.textContent = message;
+
+        const subtitle = document.createElement('p');
+        subtitle.className = 'empty-state__subtitle';
+        subtitle.textContent = '点击“添加监控”以创建新的监控任务。';
+
+        container.append(title, subtitle);
+        ui.monitorList.append(container);
+    }
+
+    function updateMonitors(monitors) {
+        state.monitors = Array.isArray(monitors) ? monitors : [];
+        renderMonitors();
+    }
+
+    function renderMonitors() {
+        if (!ui.monitorList) {
+            return;
         }
-        return ['无状态', 'red'];
+        ui.monitorList.innerHTML = '';
+        if (!state.monitors.length) {
+            renderEmpty();
+            return;
+        }
+        const fragment = document.createDocumentFragment();
+        state.monitors.forEach((item) => {
+            const card = buildMonitorCard(item);
+            fragment.appendChild(card);
+        });
+        ui.monitorList.appendChild(fragment);
+    }
+
+    function buildMonitorCard(item) {
+        const [id, name, ops, creationDate, validUntil, location, updateTime, rawState] = item;
+        const expiry = resolveExpiryStatus(validUntil);
+        const cookieStatus = resolveCookieStatus(rawState);
+        const displayName = name || '未命名实例';
+        const displayOps = ops ? ops.toUpperCase() : '未知';
+
+        const card = document.createElement('article');
+        card.className = 'monitor-card';
+        card.dataset.monitorId = id;
+
+        const header = document.createElement('div');
+        header.className = 'monitor-card__header';
+
+        const titleWrap = document.createElement('div');
+        titleWrap.className = 'monitor-card__title';
+
+        const title = document.createElement('span');
+        title.textContent = displayName;
+        titleWrap.appendChild(title);
+
+        const opsBadge = document.createElement('span');
+        opsBadge.className = 'ops-badge';
+        opsBadge.textContent = displayOps;
+        titleWrap.appendChild(opsBadge);
+
+        const actions = document.createElement('div');
+        actions.className = 'monitor-card__actions';
+
+        const editButton = document.createElement('button');
+        editButton.type = 'button';
+        editButton.className = 'ghost-btn';
+        editButton.dataset.action = 'edit';
+        editButton.dataset.id = id;
+        editButton.dataset.name = displayName;
+        editButton.textContent = '修改';
+
+        const deleteButton = document.createElement('button');
+        deleteButton.type = 'button';
+        deleteButton.className = 'danger-btn';
+        deleteButton.dataset.action = 'delete';
+        deleteButton.dataset.id = id;
+        deleteButton.dataset.name = displayName;
+        deleteButton.textContent = '删除';
+
+        actions.append(editButton, deleteButton);
+        header.append(titleWrap, actions);
+        card.appendChild(header);
+
+        const meta = document.createElement('dl');
+        meta.className = 'monitor-card__meta';
+        meta.append(
+            createMetaRow('Cookie 状态', createStatusBadge(cookieStatus.label, cookieStatus.variant)),
+            createMetaRow('过期时间', expiry.display || '—'),
+            createMetaRow('最近查询时间', updateTime || '—'),
+            createMetaRow('位置', location || '—'),
+            createMetaRow('创建时间', creationDate || '—'),
+        );
+        card.appendChild(meta);
+
+        return card;
+    }
+
+    function createStatusBadge(label, variant) {
+        const badge = document.createElement('span');
+        badge.className = `status-badge status-badge--${variant}`;
+        badge.textContent = label;
+        return badge;
+    }
+
+    function createMetaRow(label, value) {
+        const row = document.createElement('div');
+        row.className = 'monitor-card__row';
+        const dt = document.createElement('dt');
+        dt.textContent = label;
+        const dd = document.createElement('dd');
+        if (value instanceof Node) {
+            dd.appendChild(value);
+        } else {
+            dd.textContent = value;
+        }
+        row.append(dt, dd);
+        return row;
+    }
+
+    function resolveCookieStatus(stateValue) {
+        const numeric = Number(stateValue);
+        if (Number.isNaN(numeric)) {
+            return { label: '未知', variant: 'neutral' };
+        }
+        if (numeric === 1) {
+            return { label: '正常', variant: 'success' };
+        }
+        return { label: '异常', variant: 'danger' };
+    }
+
+    function resolveExpiryStatus(validUntil) {
+        if (!validUntil) {
+            return { label: '无状态', variant: 'neutral', display: '—' };
+        }
+        const { iso, display } = toUtc8Display(validUntil);
+        if (!iso) {
+            return { label: '无状态', variant: 'neutral', display: '—' };
+        }
+        const expiry = new Date(iso);
+        if (Number.isNaN(expiry.getTime())) {
+            return { label: '无状态', variant: 'neutral', display: display || '—' };
+        }
+        const diffDays = (expiry.getTime() - Date.now()) / (1000 * 60 * 60 * 24);
+        if (diffDays > 3) {
+            return { label: '正常', variant: 'success', display };
+        }
+        if (diffDays > 0 && diffDays <= 3) {
+            return { label: '待续期', variant: 'warning', display };
+        }
+        if (diffDays < 0 || diffDays > 10) {
+            return { label: '已过期', variant: 'danger', display };
+        }
+        return { label: '无状态', variant: 'neutral', display };
     }
 
     function toUtc8Display(validUntil) {
         if (!validUntil) {
-            return { iso: null, display: 'null' };
+            return { iso: null, display: '' };
         }
         const pstTime = new Date(`${validUntil} 00:00:00 PST`);
         if (Number.isNaN(pstTime.getTime())) {
-            return { iso: null, display: 'null' };
+            return { iso: null, display: '' };
         }
         pstTime.setHours(pstTime.getHours() + 23);
         pstTime.setMinutes(pstTime.getMinutes() + 59);
@@ -127,366 +310,380 @@
         const utcTimestamp = pstTime.getTime() - timeZoneOffset;
         const utcTime = new Date(utcTimestamp);
         if (Number.isNaN(utcTime.getTime())) {
-            return { iso: null, display: 'null' };
+            return { iso: null, display: '' };
         }
         const iso = utcTime.toISOString();
         const display = `${iso.replace('T', ' ').replace('Z', '').substring(0, 19)} UTC+8`;
         return { iso, display };
     }
 
-    function renderEmpty(message) {
-        contentEl.innerHTML = '';
-        const emptyState = document.createElement('h2');
-        emptyState.textContent = message || '未添加监控';
-        contentEl.appendChild(emptyState);
-    }
-
-    function buildMonitorCard(item) {
-        const [id, name, ops, creationDate, validUntil, location, updateTime, state] = item;
-        const { display } = toUtc8Display(validUntil);
-        const [statusLabel, statusColor] = ckDate(display);
-        const [stateLabel, stateColor] = ckState(state);
-
-        const card = document.createElement('div');
-        card.className = 'vps';
-
-        const header = document.createElement('div');
-        header.id = 'vpsHeader';
-
-        const opsSpan = document.createElement('span');
-        opsSpan.id = 'opsVal';
-        opsSpan.textContent = ops;
-        header.appendChild(opsSpan);
-
-        const nameSpan = document.createElement('span');
-        nameSpan.id = 'name';
-        const statusSpan = document.createElement('span');
-        statusSpan.className = 'status-chip';
-        statusSpan.style.color = statusColor;
-        statusSpan.style.fontSize = '15px';
-        statusSpan.style.width = '55px';
-        statusSpan.textContent = statusLabel;
-        nameSpan.appendChild(statusSpan);
-        nameSpan.appendChild(document.createTextNode(':'));
-
-        const nameText = document.createElement('span');
-        nameText.id = 'headerName';
-        nameText.textContent = ` ${name}`;
-        nameSpan.appendChild(nameText);
-        header.appendChild(nameSpan);
-
-        const deleteButton = document.createElement('button');
-        deleteButton.type = 'button';
-        deleteButton.dataset.action = 'delete';
-        deleteButton.dataset.id = id;
-        deleteButton.dataset.name = name;
-        deleteButton.style.color = 'red';
-        deleteButton.textContent = '删除';
-        header.appendChild(deleteButton);
-
-        const modifyButton = document.createElement('button');
-        modifyButton.type = 'button';
-        modifyButton.dataset.action = 'modify';
-        modifyButton.dataset.id = id;
-        modifyButton.dataset.name = name;
-        modifyButton.style.color = 'green';
-        modifyButton.textContent = '修改';
-        header.appendChild(modifyButton);
-
-        card.appendChild(header);
-
-        const info = document.createElement('div');
-        info.id = 'vpsInfo';
-        info.innerHTML = `
-            <span>Cookie状态：</span> <h5 style="color: ${stateColor}">${ops} : ${stateLabel}</h5>
-            <span>过期时间：</span> <h5 style="color: #fef50c; font-size: 14px">${display}</h5>
-            <span>最近查询时间：</span> <h5 style="color: blue;">${updateTime || '—'}</h5>
-            <span>位置：</span> <h5>${location || '—'}</h5>
-            <span>Creation Date：</span> <h5 class="ip_address">${creationDate || '—'}</h5>
-        `;
-        card.appendChild(info);
-
-        return card;
-    }
-
-    function renderMonitors(resp) {
-        contentEl.innerHTML = '';
-        if (!resp || !Array.isArray(resp.msg) || resp.msg.length === 0) {
-            renderEmpty('未添加监控');
-            return;
+    function hydrateFromCache() {
+        const cached = localStorage.getItem(STORAGE_KEY);
+        if (!cached) {
+            return false;
         }
-        const fragment = document.createDocumentFragment();
-        resp.msg.forEach((item) => {
-            fragment.appendChild(buildMonitorCard(item));
-        });
-        contentEl.appendChild(fragment);
+        try {
+            const parsed = JSON.parse(cached);
+            if (parsed && Array.isArray(parsed.msg)) {
+                updateMonitors(parsed.msg);
+                return true;
+            }
+        } catch (error) {
+            console.warn('[frontend] Failed to parse cached data:', error);
+        }
+        return false;
     }
 
     async function refreshData({ silent = false } = {}) {
         if (!silent) {
-            showStatus('正在加载最新数据…', 'info');
+            setLoading(true);
         }
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => {
+            controller.abort();
+        }, FETCH_TIMEOUT);
         try {
-            const response = await fetch('/select', { headers: { 'Accept': 'application/json' } });
+            const response = await fetch('/select', {
+                headers: { Accept: 'application/json' },
+                signal: controller.signal,
+            });
+            window.clearTimeout(timeout);
             if (!response.ok) {
-                throw new Error(`Request failed with status ${response.status}`);
+                throw new Error(`请求失败，状态码 ${response.status}`);
             }
             const data = await response.json();
-            renderMonitors(data);
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-            if (!silent) {
-                hideStatus();
+            const monitors = Array.isArray(data?.msg) ? data.msg : [];
+            updateMonitors(monitors);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({ msg: monitors, updatedAt: Date.now() }));
+            if (state.offline) {
+                state.offline = false;
+                hideBanner();
+                showToast('网络已恢复', 'success');
             }
         } catch (error) {
+            window.clearTimeout(timeout);
+            if (!state.offline && !isOnline()) {
+                state.offline = true;
+                setBanner('网络连接不可用，正在显示缓存内容（如有）。', 'offline', { persist: true });
+                showToast('当前离线，已切换为缓存数据。', 'warning');
+            } else if (!silent) {
+                setBanner('刷新监控数据失败，请稍后再试。', 'error');
+                showToast('刷新监控数据失败。', 'error');
+            }
             const cached = localStorage.getItem(STORAGE_KEY);
             if (cached) {
                 try {
                     const parsed = JSON.parse(cached);
-                    renderMonitors(parsed);
+                    updateMonitors(parsed?.msg || []);
                 } catch (parseError) {
-                    renderEmpty('当前无法加载数据。');
+                    console.error('[frontend] Failed to parse cached data:', parseError);
+                    renderEmpty('当前无法加载监控数据。');
                 }
             } else {
                 renderEmpty('当前无法连接到服务器。');
             }
-            handleOffline('网络不可用，已显示最近一次的缓存数据（如有）。');
+            console.error('[frontend] Failed to refresh data:', error);
+        } finally {
             if (!silent) {
-                console.error('[PWA] Failed to refresh data:', error);
+                setLoading(false);
+            } else {
+                state.loading = false;
+                ui.monitorList?.setAttribute('aria-busy', 'false');
             }
         }
     }
 
-    async function submitAdd(event) {
-        event.preventDefault();
+    function createForm({ mode = 'add', values = {} }) {
+        const fragment = ui.formTemplate.content.cloneNode(true);
+        const form = fragment.querySelector('form');
+        if (!form) {
+            return null;
+        }
+
+        let idField = form.querySelector('input[name="id"]');
+        if (mode === 'edit') {
+            if (!idField) {
+                idField = document.createElement('input');
+                idField.type = 'hidden';
+                idField.name = 'id';
+                form.appendChild(idField);
+            }
+            idField.value = values.id || '';
+        } else if (idField) {
+            idField.remove();
+        }
+
+        const opsField = form.querySelector('select[name="ops"]');
+        const cookieField = form.querySelector('input[name="cookie"]');
+        const nameField = form.querySelector('input[name="name"]');
+
+        if (mode === 'edit') {
+            if (opsField && values.ops) {
+                opsField.value = values.ops;
+            }
+            if (cookieField) {
+                cookieField.value = values.cookie || '';
+            }
+            if (nameField) {
+                nameField.value = values.name || '';
+            }
+        }
+
+        const cancelButton = form.querySelector('[data-modal-cancel]');
+        if (cancelButton) {
+            cancelButton.addEventListener('click', () => {
+                modalManager.close();
+            });
+        }
+        return form;
+    }
+
+    async function submitAdd(form) {
         if (!isOnline()) {
-            handleOffline('网络不可用，无法添加监控。');
+            state.offline = true;
+            setBanner('网络不可用，无法添加监控。', 'offline', { persist: true });
+            showToast('当前离线，无法添加监控。', 'error');
             return;
         }
-        const formData = new FormData(addForm);
+        const formData = new FormData(form);
         try {
-            const response = await fetch('/add', { method: 'POST', body: formData });
+            const response = await fetch('/add', {
+                method: 'POST',
+                body: formData,
+            });
             if (!response.ok) {
-                throw new Error(`Add failed with status ${response.status}`);
+                throw new Error(`添加失败，状态码 ${response.status}`);
             }
             const payload = await response.json();
-            showStatus(payload.message || '添加成功', 'success');
-            closeActiveModal();
-            addForm.reset();
+            const message = payload?.message || '添加成功';
+            showToast(message, 'success');
+            modalManager.close();
             refreshData({ silent: true });
         } catch (error) {
-            console.error('[PWA] Failed to add monitor:', error);
-            showStatus('添加失败，请稍后再试。', 'error', { persist: true });
+            console.error('[frontend] Failed to add monitor:', error);
+            showToast('添加失败，请稍后再试。', 'error');
+            setBanner('添加失败，请稍后再试。', 'error');
         }
     }
 
-    async function handleDelete(button) {
-        const id = button.dataset.id;
-        const name = button.dataset.name || '';
-        const confirmed = window.confirm(`确定要删除名为 ${name} 的监控吗？`);
-        if (!confirmed) {
+    async function submitEdit(form) {
+        if (!isOnline()) {
+            state.offline = true;
+            setBanner('网络不可用，无法修改监控。', 'offline', { persist: true });
+            showToast('当前离线，无法修改。', 'error');
+            return;
+        }
+        const formData = new FormData(form);
+        try {
+            const response = await fetch('/modify', {
+                method: 'POST',
+                body: formData,
+            });
+            if (!response.ok) {
+                throw new Error(`修改失败，状态码 ${response.status}`);
+            }
+            const payload = await response.json();
+            const message = payload?.msg || '修改成功';
+            if (message.includes('成功')) {
+                showToast(message, 'success');
+                modalManager.close();
+                refreshData({ silent: true });
+            } else {
+                showToast(message, 'error');
+                setBanner(message, 'error', { persist: true });
+            }
+        } catch (error) {
+            console.error('[frontend] Failed to modify monitor:', error);
+            showToast('修改失败，请稍后再试。', 'error');
+            setBanner('修改失败，请稍后再试。', 'error', { persist: true });
+        }
+    }
+
+    async function handleDelete(id, name) {
+        if (!id) {
+            return;
+        }
+        if (!window.confirm(`确定要删除名为 ${name || ''} 的监控吗？`)) {
             return;
         }
         if (!isOnline()) {
-            handleOffline('网络不可用，无法删除监控。');
+            state.offline = true;
+            setBanner('网络不可用，无法删除监控。', 'offline', { persist: true });
+            showToast('当前离线，无法删除监控。', 'error');
             return;
         }
         try {
             const params = new URLSearchParams();
             params.append('id', id);
-            const response = await fetch('/del', { method: 'POST', body: params });
+            const response = await fetch('/del', {
+                method: 'POST',
+                body: params,
+            });
             if (!response.ok) {
-                throw new Error(`Delete failed with status ${response.status}`);
+                throw new Error(`删除失败，状态码 ${response.status}`);
             }
             const payload = await response.json();
-            if (payload.msg && payload.msg.indexOf('成功') !== -1) {
-                showStatus(payload.msg, 'success');
+            const message = payload?.msg || '删除完成';
+            if (message.includes('成功')) {
+                showToast(message, 'success');
                 refreshData({ silent: true });
             } else {
-                showStatus(payload.msg || '删除失败', 'error', { persist: true });
+                showToast(message, 'error');
+                setBanner(message, 'error', { persist: true });
             }
         } catch (error) {
-            console.error('[PWA] Failed to delete monitor:', error);
-            showStatus('删除失败，请稍后再试。', 'error', { persist: true });
+            console.error('[frontend] Failed to delete monitor:', error);
+            showToast('删除失败，请稍后再试。', 'error');
+            setBanner('删除失败，请稍后再试。', 'error', { persist: true });
         }
     }
 
-    function bindModifyForm() {
-        const modifyForm = document.getElementById('modifyWindow');
-        const cancelButton = document.getElementById('cancel');
-        if (modifyForm) {
-            modifyForm.addEventListener('submit', async (event) => {
-                event.preventDefault();
-                if (!isOnline()) {
-                    handleOffline('网络不可用，无法提交修改。');
-                    return;
-                }
-                const formData = new FormData(modifyForm);
-                try {
-                    const response = await fetch('/modify', { method: 'POST', body: formData });
-                    if (!response.ok) {
-                        throw new Error(`Modify failed with status ${response.status}`);
-                    }
-                    const payload = await response.json();
-                    if (payload.msg && payload.msg.indexOf('成功') !== -1) {
-                        showStatus(payload.msg, 'success');
-                        closeActiveModal();
-                        modifyContainer.innerHTML = '';
-                        refreshData({ silent: true });
-                    } else {
-                        showStatus(payload.msg || '修改失败', 'error', { persist: true });
-                    }
-                } catch (error) {
-                    console.error('[PWA] Failed to modify monitor:', error);
-                    showStatus('修改失败，请稍后再试。', 'error', { persist: true });
-                }
-            });
-        }
-        if (cancelButton) {
-            cancelButton.addEventListener('click', () => {
-                closeActiveModal();
-                modifyContainer.innerHTML = '';
-            });
-        }
-    }
-
-    async function handleModify(button) {
-        const id = button.dataset.id;
-        if (!isOnline()) {
-            handleOffline('网络不可用，无法加载监控信息。');
+    async function openEditModal(id) {
+        if (!id) {
             return;
         }
-        const pwd = window.prompt('请输入验证密码：');
-        if (pwd === null) {
+        if (!isOnline()) {
+            state.offline = true;
+            setBanner('网络不可用，无法加载监控信息。', 'offline', { persist: true });
+            showToast('当前离线，无法加载监控信息。', 'error');
+            return;
+        }
+        const password = window.prompt('请输入验证密码：');
+        if (password === null) {
             return;
         }
         try {
             const pwdParams = new URLSearchParams();
-            pwdParams.append('pwd', pwd);
-            const pwdResp = await fetch('/checkPwd', { method: 'POST', body: pwdParams });
-            if (!pwdResp.ok) {
-                throw new Error(`Password check failed with status ${pwdResp.status}`);
+            pwdParams.append('pwd', password);
+            const pwdResponse = await fetch('/checkPwd', {
+                method: 'POST',
+                body: pwdParams,
+            });
+            if (!pwdResponse.ok) {
+                throw new Error(`密码验证失败，状态码 ${pwdResponse.status}`);
             }
-            const pwdPayload = await pwdResp.json();
-            if (pwdPayload.msg !== 'success') {
+            const pwdPayload = await pwdResponse.json();
+            if (pwdPayload?.msg !== 'success') {
                 window.alert('密码验证失败');
                 return;
             }
-            const idParams = new URLSearchParams();
-            idParams.append('id', id);
-            const detailResp = await fetch('/sel_id', { method: 'POST', body: idParams });
-            if (!detailResp.ok) {
-                throw new Error(`Fetch detail failed with status ${detailResp.status}`);
-            }
-            const detailPayload = await detailResp.json();
-            const record = Array.isArray(detailPayload.msg) ? detailPayload.msg[0] : null;
-            if (!record) {
-                showStatus('未找到监控信息。', 'error', { persist: true });
-                return;
-            }
-            const ops = record[2];
-            modifyContainer.innerHTML = `
-                <h2>修改监控信息</h2>
-                <form id="modifyWindow">
-                    <ul>
-                        <li>
-                            <input type="text" id="id" name="id" value="${record[0]}" style="display: none" readonly required>
-                            <label for="ops">选择小鸡站：</label>
-                            <select id="ops" name="ops">
-                                <option value="hax" ${ops === 'hax' ? 'selected' : ''}>Hax</option>
-                                <option value="woiden" ${ops === 'woiden' ? 'selected' : ''}>Woiden</option>
-                                <option value="vc" ${ops === 'vc' ? 'selected' : ''}>Vc</option>
-                            </select>
-                        </li>
-                        <li>
-                            <label for="cookie">网页Cookie：</label>
-                            <input type="text" id="cookie" name="cookie" value="${record[3]}" required>
-                        </li>
-                        <li>
-                            <label for="name">设置备注名：</label>
-                            <input type="text" id="name" name="name" value="${record[1]}" required>
-                        </li>
-                        <li>
-                            <button type="submit" id="modify_commit">提交</button>
-                            <button type="button" id="cancel">取消</button>
-                        </li>
-                    </ul>
-                </form>
-            `;
-            openModal(modifyContainer);
-            bindModifyForm();
-        } catch (error) {
-            console.error('[PWA] Failed to load monitor detail:', error);
-            showStatus('加载监控信息失败，请稍后再试。', 'error', { persist: true });
-        }
-    }
 
-    function handleContentClick(event) {
-        const button = event.target.closest('button[data-action]');
-        if (!button || !contentEl.contains(button)) {
-            return;
-        }
-        const action = button.dataset.action;
-        if (action === 'delete') {
-            handleDelete(button);
-        } else if (action === 'modify') {
-            handleModify(button);
-        }
-    }
-
-    function initEvents() {
-        if (addTrigger) {
-            addTrigger.addEventListener('click', () => openModal(addWindow));
-        }
-        if (closeAddButton) {
-            closeAddButton.addEventListener('click', closeActiveModal);
-        }
-        if (overlay) {
-            overlay.addEventListener('click', () => {
-                closeActiveModal();
-                modifyContainer.innerHTML = '';
+            const detailParams = new URLSearchParams();
+            detailParams.append('id', id);
+            const detailResponse = await fetch('/sel_id', {
+                method: 'POST',
+                body: detailParams,
             });
-        }
-        if (addForm) {
-            addForm.addEventListener('submit', submitAdd);
-        }
-        if (contentEl) {
-            contentEl.addEventListener('click', handleContentClick);
-        }
-        window.addEventListener('online', () => {
-            handleOnline();
-            refreshData({ silent: true });
-        });
-        window.addEventListener('offline', () => handleOffline('网络连接不可用，正在使用缓存数据。'));
-    }
-
-    function initInstallPrompt() {
-        if (!installButton) {
-            return;
-        }
-        installButton.addEventListener('click', async () => {
-            if (!deferredPrompt) {
+            if (!detailResponse.ok) {
+                throw new Error(`监控信息加载失败，状态码 ${detailResponse.status}`);
+            }
+            const detailPayload = await detailResponse.json();
+            const record = Array.isArray(detailPayload?.msg) ? detailPayload.msg[0] : null;
+            if (!record) {
+                showToast('未找到监控信息。', 'error');
+                setBanner('未找到监控信息。', 'error', { persist: true });
                 return;
             }
-            deferredPrompt.prompt();
+            const form = createForm({
+                mode: 'edit',
+                values: {
+                    id: record[0],
+                    name: record[1],
+                    ops: record[2],
+                    cookie: record[3],
+                },
+            });
+            if (!form) {
+                showToast('无法加载编辑表单。', 'error');
+                return;
+            }
+            form.addEventListener('submit', (event) => {
+                event.preventDefault();
+                submitEdit(form);
+            });
+            modalManager.open({
+                title: '修改监控信息',
+                content: form,
+                focusSelector: 'input[name="name"]',
+            });
+        } catch (error) {
+            console.error('[frontend] Failed to load monitor detail:', error);
+            showToast('加载监控信息失败，请稍后再试。', 'error');
+            setBanner('加载监控信息失败，请稍后再试。', 'error', { persist: true });
+        }
+    }
+
+    function openAddModal() {
+        const form = createForm({ mode: 'add' });
+        if (!form) {
+            showToast('无法加载添加表单。', 'error');
+            return;
+        }
+        form.addEventListener('submit', (event) => {
+            event.preventDefault();
+            submitAdd(form);
+        });
+        modalManager.open({
+            title: '添加一个监控',
+            content: form,
+            focusSelector: 'input[name="name"]',
+        });
+    }
+
+    function handleMonitorListClick(event) {
+        const button = event.target.closest('button[data-action]');
+        if (!button || !ui.monitorList.contains(button)) {
+            return;
+        }
+        const { action, id, name } = button.dataset;
+        if (action === 'delete') {
+            handleDelete(id, name);
+        } else if (action === 'edit') {
+            openEditModal(id);
+        }
+    }
+
+    function handleOnline() {
+        state.offline = false;
+        hideBanner();
+        showToast('网络已恢复', 'success');
+        refreshData({ silent: true });
+    }
+
+    function handleOffline() {
+        state.offline = true;
+        setBanner('网络连接不可用，正在显示缓存内容（如有）。', 'offline', { persist: true });
+        showToast('当前离线，将显示缓存数据。', 'warning');
+    }
+
+    function setupInstallPrompt() {
+        if (!ui.installButton) {
+            return;
+        }
+        ui.installButton.addEventListener('click', async () => {
+            if (!state.deferredPrompt) {
+                return;
+            }
+            state.deferredPrompt.prompt();
             try {
-                await deferredPrompt.userChoice;
+                await state.deferredPrompt.userChoice;
             } finally {
-                deferredPrompt = null;
-                installButton.classList.add('hidden');
+                state.deferredPrompt = null;
+                ui.installButton.classList.add('hidden');
             }
         });
 
         window.addEventListener('beforeinstallprompt', (event) => {
             event.preventDefault();
-            deferredPrompt = event;
-            installButton.classList.remove('hidden');
-            showStatus('应用可安装，点击“安装应用”按钮以添加到桌面。', 'info', { persist: true });
+            state.deferredPrompt = event;
+            ui.installButton.classList.remove('hidden');
+            showToast('提示：可将此应用安装到桌面。', 'info');
         });
 
         window.addEventListener('appinstalled', () => {
-            deferredPrompt = null;
-            installButton.classList.add('hidden');
-            showStatus('应用安装成功！', 'success');
+            state.deferredPrompt = null;
+            ui.installButton.classList.add('hidden');
+            showToast('应用安装成功！', 'success');
         });
     }
 
@@ -494,31 +691,136 @@
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('/service-worker.js').catch((error) => {
-                    console.error('[PWA] Service worker registration failed:', error);
+                    console.error('[frontend] Service worker registration failed:', error);
                 });
             });
         }
     }
 
+    function cleanup() {
+        if (state.refreshTimer) {
+            window.clearInterval(state.refreshTimer);
+            state.refreshTimer = null;
+        }
+        if (bannerTimeoutId) {
+            window.clearTimeout(bannerTimeoutId);
+            bannerTimeoutId = null;
+        }
+    }
+
     function init() {
-        initEvents();
-        initInstallPrompt();
-        registerServiceWorker();
-        if (!isOnline()) {
-            handleOffline('网络不可用，尝试加载缓存数据。');
+        hydrateFromCache();
+        if (state.offline) {
+            setBanner('当前处于离线状态，正在显示缓存内容。', 'offline', { persist: true });
         }
         refreshData();
-        refreshTimer = window.setInterval(() => refreshData({ silent: true }), REFRESH_INTERVAL);
+        state.refreshTimer = window.setInterval(() => {
+            refreshData({ silent: true });
+        }, REFRESH_INTERVAL);
+
+        ui.addButton?.addEventListener('click', openAddModal);
+        ui.monitorList?.addEventListener('click', handleMonitorListClick);
+        window.addEventListener('online', handleOnline);
+        window.addEventListener('offline', handleOffline);
+        window.addEventListener('beforeunload', cleanup);
+
+        setupInstallPrompt();
+        registerServiceWorker();
     }
 
     init();
+}
 
-    window.addEventListener('beforeunload', () => {
-        if (refreshTimer) {
-            window.clearInterval(refreshTimer);
+function createModalManager({ modal, overlay, titleEl, bodyEl }) {
+    let lastFocusedElement = null;
+    let onCloseCallback = null;
+
+    function close() {
+        if (!modal || modal.classList.contains('hidden')) {
+            return;
         }
-        if (statusTimeoutId) {
-            window.clearTimeout(statusTimeoutId);
+        modal.classList.add('hidden');
+        modal.setAttribute('aria-hidden', 'true');
+        overlay?.classList.add('hidden');
+        bodyEl?.replaceChildren();
+        const callback = onCloseCallback;
+        onCloseCallback = null;
+        const previousFocus = lastFocusedElement;
+        lastFocusedElement = null;
+        document.removeEventListener('keydown', trapFocus);
+        if (previousFocus && typeof previousFocus.focus === 'function') {
+            requestAnimationFrame(() => {
+                previousFocus.focus({ preventScroll: true });
+            });
+        }
+        if (typeof callback === 'function') {
+            callback();
+        }
+    }
+
+    function trapFocus(event) {
+        if (!modal || modal.classList.contains('hidden')) {
+            return;
+        }
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            close();
+            return;
+        }
+        if (event.key !== 'Tab') {
+            return;
+        }
+        const focusableElements = Array.from(modal.querySelectorAll(FOCUSABLE_SELECTORS)).filter((el) => !el.hasAttribute('disabled') && el.getAttribute('aria-hidden') !== 'true');
+        if (!focusableElements.length) {
+            event.preventDefault();
+            return;
+        }
+        const first = focusableElements[0];
+        const last = focusableElements[focusableElements.length - 1];
+        if (event.shiftKey) {
+            if (document.activeElement === first) {
+                event.preventDefault();
+                last.focus();
+            }
+        } else if (document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+        }
+    }
+
+    function open({ title = '', content, focusSelector, onClose } = {}) {
+        if (!modal || !overlay || !bodyEl) {
+            return;
+        }
+        close();
+        lastFocusedElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        modal.classList.remove('hidden');
+        modal.setAttribute('aria-hidden', 'false');
+        overlay.classList.remove('hidden');
+        bodyEl.replaceChildren(content);
+        titleEl.textContent = title || '';
+        onCloseCallback = typeof onClose === 'function' ? onClose : null;
+        document.addEventListener('keydown', trapFocus);
+        requestAnimationFrame(() => {
+            const focusTarget = focusSelector ? modal.querySelector(focusSelector) : null;
+            const candidate = (focusTarget instanceof HTMLElement ? focusTarget : modal.querySelector(FOCUSABLE_SELECTORS)) || modal;
+            if (candidate && typeof candidate.focus === 'function') {
+                candidate.focus();
+            }
+        });
+    }
+
+    overlay?.addEventListener('click', close);
+    modal?.addEventListener('click', (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) {
+            return;
+        }
+        if (target.closest('[data-modal-close]') || target.closest('[data-modal-cancel]')) {
+            event.preventDefault();
+            close();
         }
     });
-})();
+
+    return { open, close };
+}
