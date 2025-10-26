@@ -18,6 +18,18 @@ DATE_PATTERNS = (
     '%b %d, %Y',
 )
 
+DATETIME_PATTERNS = (
+    '%Y-%m-%d %H:%M:%S',
+    '%Y-%m-%d %H:%M',
+    '%Y/%m/%d %H:%M:%S',
+    '%Y/%m/%d %H:%M',
+    '%B %d, %Y %H:%M',
+    '%b %d, %Y %H:%M',
+    '%B %d, %Y %I:%M %p',
+    '%b %d, %Y %I:%M %p',
+)
+
+_EXPIRY_BACKFILL_DONE = False
 
 def connSqlite():
     conn = sqlite3.connect(DB_PATH)
@@ -27,6 +39,7 @@ def connSqlite():
 
 
 def _ensure_schema(conn):
+    global _EXPIRY_BACKFILL_DONE
     cursor = conn.cursor()
     cursor.execute(
         '''CREATE TABLE IF NOT EXISTS vps
@@ -59,6 +72,9 @@ def _ensure_schema(conn):
     if 'expiry_utc' not in columns:
         cursor.execute('ALTER TABLE vps ADD COLUMN expiry_utc TEXT')
     conn.commit()
+    if not _EXPIRY_BACKFILL_DONE:
+        _backfill_expiry_utc(conn)
+        _EXPIRY_BACKFILL_DONE = True
 
 
 def _parse_date_string(value):
@@ -80,6 +96,34 @@ def _parse_date_string(value):
         return None
 
 
+def _parse_localized_datetime(value, timezone):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    normalized = text.replace('Z', '+00:00') if 'Z' in text else text
+    try:
+        parsed = datetime.datetime.fromisoformat(normalized)
+    except ValueError:
+        parsed = None
+    if parsed is not None:
+        if parsed.tzinfo is None:
+            return timezone.localize(parsed)
+        return parsed.astimezone(timezone)
+    for pattern in DATETIME_PATTERNS:
+        try:
+            naive = datetime.datetime.strptime(text, pattern)
+            return timezone.localize(naive)
+        except ValueError:
+            continue
+    date_value = _parse_date_string(text)
+    if date_value is None:
+        return None
+    naive_midnight = datetime.datetime.combine(date_value, datetime.time.min)
+    return timezone.localize(naive_midnight)
+
+
 def _parse_iso_datetime(value):
     if value is None:
         return None
@@ -97,32 +141,32 @@ def _parse_iso_datetime(value):
 
 
 def calculate_expiry_utc(creation_value, valid_value):
-    renewal_date = _parse_date_string(creation_value)
-    if renewal_date is None:
-        valid_date = _parse_date_string(valid_value)
-        if valid_date is not None:
-            renewal_date = valid_date - datetime.timedelta(days=5)
-    if renewal_date is None:
+    expiry_local = _parse_localized_datetime(valid_value, JAKARTA_TZ)
+    if expiry_local is None:
+        creation_local = _parse_localized_datetime(creation_value, JAKARTA_TZ)
+        if creation_local is not None:
+            anchor = creation_local.replace(hour=0, minute=0, second=0, microsecond=0)
+            expiry_local = JAKARTA_TZ.normalize(anchor + datetime.timedelta(days=5))
+        else:
+            creation_date = _parse_date_string(creation_value)
+            if creation_date is not None:
+                anchor = datetime.datetime.combine(creation_date, datetime.time.min)
+                localized_anchor = JAKARTA_TZ.localize(anchor)
+                expiry_local = JAKARTA_TZ.normalize(localized_anchor + datetime.timedelta(days=5))
+    if expiry_local is None:
         return None
-    expiry_date = renewal_date + datetime.timedelta(days=5)
-    expiry_naive = datetime.datetime.combine(expiry_date, datetime.time(0, 0, 0))
-    expiry_local = JAKARTA_TZ.localize(expiry_naive)
-    return expiry_local.astimezone(UTC)
+    return expiry_local.replace(microsecond=0).astimezone(UTC)
 
 
 def format_malaysia_display(expiry_dt_utc):
     if expiry_dt_utc is None:
         return ''
     target = expiry_dt_utc.astimezone(MALAYSIA_TZ)
-    date_part = target.strftime('%d %B %Y')
-    hour = target.strftime('%I').lstrip('0') or '0'
-    minute = target.strftime('%M')
-    suffix = target.strftime('%p').lower()
-    if minute == '00':
-        time_part = f'{hour}{suffix}'
-    else:
-        time_part = f'{hour}:{minute}{suffix}'
-    return f'{date_part} {time_part} Malaysia time (MYT)'
+    date_part = f"{target.day} {target.strftime('%b %Y')}"
+    time_part = target.strftime('%I:%M %p')
+    if time_part.startswith('0'):
+        time_part = time_part[1:]
+    return f'{date_part}, {time_part} MYT'
 
 
 def resolve_expiry_values(creation_value, valid_value, expiry_value):
@@ -131,8 +175,27 @@ def resolve_expiry_values(creation_value, valid_value, expiry_value):
         expiry_dt = calculate_expiry_utc(creation_value, valid_value)
     if expiry_dt is None:
         return None, None, ''
-    expiry_utc = expiry_dt.astimezone(UTC)
+    expiry_utc = expiry_dt.astimezone(UTC).replace(microsecond=0)
     return expiry_utc, expiry_utc.isoformat(), format_malaysia_display(expiry_utc)
+
+
+def _backfill_expiry_utc(conn):
+    cursor = conn.cursor()
+    try:
+        cursor.execute('SELECT id, creation_date, valid_until, expiry_utc FROM vps')
+    except sqlite3.OperationalError:
+        return
+    rows = cursor.fetchall()
+    updates = []
+    for row in rows:
+        expiry_dt = calculate_expiry_utc(row['creation_date'], row['valid_until'])
+        expiry_iso = expiry_dt.isoformat() if expiry_dt is not None else None
+        existing_iso = row['expiry_utc']
+        if expiry_iso != existing_iso:
+            updates.append((expiry_iso, row['id']))
+    if updates:
+        cursor.executemany('UPDATE vps SET expiry_utc=? WHERE id=?', updates)
+        conn.commit()
 
 
 def update_expiry_utc(id, expiry_iso):
@@ -184,7 +247,7 @@ def updateInfoSql(creation_date, valid_until, location, ipv6, ram, disk_total, i
             ipv6,
             ram,
             disk_total,
-            datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat(),
             1,
             expiry_iso,
             id,
