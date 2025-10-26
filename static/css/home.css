@@ -9,6 +9,80 @@ body {
     width: 100vw;
 }
 
+body {
+    font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    color: #0f172a;
+}
+
+.hidden {
+    display: none !important;
+}
+
+.status-banner {
+    max-width: 720px;
+    margin: 20px auto 0;
+    padding: 12px 16px;
+    border-radius: 16px;
+    background: rgba(14, 165, 233, 0.85);
+    color: #0b1120;
+    text-align: center;
+    box-shadow: 0 16px 40px rgba(15, 23, 42, 0.25);
+    backdrop-filter: blur(4px);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.status-banner[data-state="success"] {
+    background: rgba(34, 197, 94, 0.9);
+    color: #052e16;
+}
+
+.status-banner[data-state="error"],
+.status-banner[data-state="offline"] {
+    background: rgba(239, 68, 68, 0.92);
+    color: #fff7ed;
+}
+
+.status-banner[data-state="info"] {
+    background: rgba(14, 165, 233, 0.85);
+    color: #0b1120;
+}
+
+.actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+    margin-top: 18px;
+}
+
+.install-btn {
+    background: linear-gradient(135deg, #0ea5e9, #22d3ee);
+    border: none;
+    color: #0b1120;
+    font-weight: 600;
+    padding: 10px 18px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    box-shadow: 0 12px 30px rgba(14, 165, 233, 0.35);
+}
+
+.install-btn:hover,
+.install-btn:focus-visible {
+    transform: translateY(-2px);
+    box-shadow: 0 16px 36px rgba(14, 165, 233, 0.45);
+    outline: none;
+}
+
+.status-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}
+
 /* 对于小于等于 768 像素的设备 */
 @media (max-width: 768px) {
     body {
@@ -16,6 +90,16 @@ body {
         background-repeat: no-repeat;
         background-size: cover;
         background-attachment: fixed;
+    }
+
+    .actions {
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .install-btn {
+        width: 180px;
+        font-size: 14px;
     }
 
     /* 在这里定义样式 */
@@ -188,9 +272,19 @@ body {
 
     .add_span {
         display: block;
-        margin-top: 2%;
+        margin-top: 0;
         font-size: 14px;
         font-family: Cambria, Cochin, Georgia, Times, 'Times New Roman', serif;
+    }
+
+    .actions {
+        justify-content: center;
+        gap: 16px;
+        margin-top: 24px;
+    }
+
+    .install-btn {
+        font-size: 15px;
     }
 
     .add_span a {
