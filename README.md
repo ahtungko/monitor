@@ -65,7 +65,13 @@
 - 网页端现已支持 Progressive Web App，可通过浏览器地址栏的安装提示或页面中的“安装应用”按钮，将监控面板安装到桌面。
 - `manifest.json` 位于项目根目录，新的图标资源存放在 `static/icons/`，核心脚本/样式位于 `static/js/` 与 `static/css/`。
 - `service-worker.js` 会在访问首页时注册：
-  - 预缓存首页、CSS、JavaScript、背景图以及所有图标，确保在离线状态下仍可以打开基础界面；
+  - 预缓存首页、CSS、JavaScript 以及所有图标资源，确保在离线状态下仍可以打开基础界面；
   - 对 `/select` 等数据接口采用 network-first 策略，无法联网时自动回退到缓存数据并在页面顶部显示离线提示。
 - 开发调试时，如修改了前端资源或 service worker，请在浏览器 DevTools 中执行 **Hard Reload + Clear Storage** 或注销旧的 service worker 以便加载最新缓存。
 - 启动方式与此前一致，运行 `python3 main.py` 即会同时提供 PWA 资源。部署后建议使用 Chrome DevTools → Lighthouse → **Progressive Web App** 检查项，自检是否满足 *Installable* 与 *Offline capable* 要求。
+
+## 前端样式说明
+
+- 页面现在使用自托管的 Pico.css 精简构建 (`static/css/pico.min.css`) 作为基础样式，配合 `static/css/theme.css` 与 `static/css/components.css` 定义的设计令牌与组件外观。
+- 统一的颜色、排版、间距变量支持 `prefers-color-scheme`，在浅色与深色模式之间自动切换，同时保留可访问的对比度与焦点状态。
+- 监控卡片、表单、弹窗及提示采用响应式网格与柔和过渡动画，覆盖移动端到桌面端的触控与键盘操作场景。
