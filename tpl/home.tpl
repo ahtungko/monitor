@@ -72,6 +72,19 @@
         </div>
     </section>
 
+    <div id="installPrompt" class="install-prompt hidden" role="dialog" aria-live="polite" aria-label="安装应用提示" aria-hidden="true">
+        <div class="install-prompt__content">
+            <div class="install-prompt__text">
+                <strong>安装应用</strong>
+                <p>将此监控面板添加到桌面，随时快速访问。</p>
+            </div>
+            <div class="install-prompt__actions">
+                <button type="button" class="install-btn install-btn--compact" data-install-accept>立即安装</button>
+                <button type="button" class="ghost-btn ghost-btn--compact" data-install-dismiss>稍后再说</button>
+            </div>
+        </div>
+    </div>
+
     <template id="monitor-form-template">
         <form class="monitor-form" novalidate>
             <fieldset class="form-fieldset">

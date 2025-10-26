@@ -7,6 +7,9 @@ const ui = {
     monitorList: document.querySelector('[data-monitor-list]'),
     addButton: document.getElementById('openAddBtn'),
     installButton: document.getElementById('installBtn'),
+    installPrompt: document.getElementById('installPrompt'),
+    installPromptAccept: document.querySelector('[data-install-accept]'),
+    installPromptDismiss: document.querySelector('[data-install-dismiss]'),
     statusBanner: document.getElementById('statusBanner'),
     modalOverlay: document.getElementById('modalOverlay'),
     modal: document.getElementById('modal'),
@@ -791,32 +794,84 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
     }
 
     function setupInstallPrompt() {
-        if (!ui.installButton) {
+        const {
+            installButton,
+            installPrompt,
+            installPromptAccept,
+            installPromptDismiss,
+        } = ui;
+
+        if (!installButton && !installPrompt) {
             return;
         }
-        ui.installButton.addEventListener('click', async () => {
-            if (!state.deferredPrompt) {
+
+        const showInstallButton = () => {
+            installButton?.classList.remove('hidden');
+        };
+
+        const hideInstallButton = () => {
+            installButton?.classList.add('hidden');
+        };
+
+        const showInstallPromptBanner = () => {
+            installPrompt?.classList.remove('hidden');
+            installPrompt?.setAttribute('aria-hidden', 'false');
+        };
+
+        const hideInstallPromptBanner = () => {
+            installPrompt?.classList.add('hidden');
+            installPrompt?.setAttribute('aria-hidden', 'true');
+        };
+
+        const showInstallPromotion = () => {
+            showInstallButton();
+            showInstallPromptBanner();
+        };
+
+        const hideInstallPromotion = () => {
+            hideInstallButton();
+            hideInstallPromptBanner();
+        };
+
+        const triggerInstallFlow = async () => {
+            const promptEvent = state.deferredPrompt;
+            if (!promptEvent) {
                 return;
             }
-            state.deferredPrompt.prompt();
             try {
-                await state.deferredPrompt.userChoice;
+                promptEvent.prompt();
+                const { outcome } = await promptEvent.userChoice;
+                if (outcome === 'dismissed') {
+                    showToast('安装已取消。', 'info');
+                }
+            } catch (error) {
+                console.error('[frontend] Failed to show install prompt:', error);
+                showToast('无法启动安装提示。', 'error');
             } finally {
                 state.deferredPrompt = null;
-                ui.installButton.classList.add('hidden');
+                hideInstallPromotion();
             }
+        };
+
+        installButton?.addEventListener('click', triggerInstallFlow);
+        installPromptAccept?.addEventListener('click', triggerInstallFlow);
+
+        installPromptDismiss?.addEventListener('click', () => {
+            hideInstallPromptBanner();
+            showInstallButton();
+            showToast('稍后可通过“安装应用”按钮继续安装。', 'info');
         });
 
         window.addEventListener('beforeinstallprompt', (event) => {
             event.preventDefault();
             state.deferredPrompt = event;
-            ui.installButton.classList.remove('hidden');
+            showInstallPromotion();
             showToast('提示：可将此应用安装到桌面。', 'info');
         });
 
         window.addEventListener('appinstalled', () => {
             state.deferredPrompt = null;
-            ui.installButton.classList.add('hidden');
+            hideInstallPromotion();
             showToast('应用安装成功！', 'success');
         });
     }

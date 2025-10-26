@@ -238,6 +238,75 @@
   background: rgba(239, 68, 68, 0.1);
 }
 
+.install-prompt {
+  position: fixed;
+  left: 50%;
+  bottom: clamp(1rem, 5vw, 2.25rem);
+  transform: translateX(-50%);
+  width: min(92vw, 28rem);
+  padding: 0 0.5rem;
+  z-index: 70;
+  pointer-events: none;
+}
+
+.install-prompt__content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+  background: var(--color-surface-card);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-4);
+  pointer-events: auto;
+  animation: cardFadeUp 320ms var(--ease-standard);
+}
+
+.install-prompt__text {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.install-prompt__text strong {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.install-prompt__text p {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 0.95rem;
+}
+
+.install-prompt__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+.install-btn--compact,
+.ghost-btn--compact {
+  min-height: 2.5rem;
+  padding: 0.65rem 1.3rem;
+}
+
+.ghost-btn--compact {
+  border-radius: 999px;
+}
+
+@media (min-width: 520px) {
+  .install-prompt__content {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+
+  .install-prompt__actions {
+    justify-content: flex-end;
+  }
+}
+
 .status-banner {
   position: sticky;
   top: 1rem;
