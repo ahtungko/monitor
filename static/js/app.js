@@ -741,14 +741,42 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
                 method: 'POST',
                 body: detailParams,
             });
+
+            let detailPayload = null;
+            try {
+                detailPayload = await detailResponse.json();
+            } catch (parseError) {
+                detailPayload = null;
+            }
+
+            if (detailResponse.status === 404) {
+                const message = detailPayload?.error || '未找到监控信息。';
+                showToast(message, 'error');
+                setBanner(message, 'error', { persist: true });
+                return;
+            }
+
+            if (detailResponse.status === 400) {
+                const message = detailPayload?.error || '请求参数无效。';
+                showToast(message, 'error');
+                setBanner(message, 'error', { persist: true });
+                return;
+            }
+
             if (!detailResponse.ok) {
                 throw new Error(`监控信息加载失败，状态码 ${detailResponse.status}`);
             }
-            const detailPayload = await detailResponse.json();
-            const record = Array.isArray(detailPayload?.msg) ? detailPayload.msg[0] : null;
+
+            if (detailPayload === null) {
+                throw new Error('监控信息加载失败，响应格式无效。');
+            }
+
+            const records = Array.isArray(detailPayload?.msg) ? detailPayload.msg : [];
+            const record = records[0];
             if (!record) {
-                showToast('未找到监控信息。', 'error');
-                setBanner('未找到监控信息。', 'error', { persist: true });
+                const message = detailPayload?.error || '未找到监控信息。';
+                showToast(message, 'error');
+                setBanner(message, 'error', { persist: true });
                 return;
             }
             const form = createForm({

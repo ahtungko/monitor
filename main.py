@@ -1,8 +1,17 @@
 # -*- coding: utf-8 -*-
-from bottle import route, run, template, debug, request, static_file
+from bottle import route, run, template, debug, request, static_file, response
 from add import *
+import logging
 import threading, time, sys, signal
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter('[%(asctime)s] %(levelname)s %(name)s: %(message)s'))
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+logger.propagate = False
 
 should_stop_checking = False
 def check_vps():
@@ -115,10 +124,44 @@ def checkPwd():
         print(conf('password'))
         print(request.forms.get('pwd'))
         print('error')
-@route('/sel_id', method = 'POST')
+@route('/sel_id', method='POST')
 def sel_Id():
-    id = request.forms.get('id')
-    return selectVPSForId(id)
+    raw_id = request.forms.get('id')
+    raw_id_text = '' if raw_id is None else str(raw_id).strip()
+    client_ip = request.remote_addr or '-'
+
+    if not raw_id_text:
+        logger.warning('Missing monitor id in /sel_id request from %s', client_ip)
+        response.status = 400
+        return {'msg': None, 'error': '监控 ID 不能为空。'}
+
+    try:
+        monitor_id = int(raw_id_text)
+    except ValueError:
+        logger.warning('Invalid monitor id "%s" in /sel_id request from %s', raw_id_text, client_ip)
+        response.status = 400
+        return {'msg': None, 'error': '监控 ID 格式不正确。'}
+
+    try:
+        payload = selectVPSForId(monitor_id)
+    except Exception:
+        logger.exception('Failed to retrieve monitor details for id %s', monitor_id)
+        response.status = 500
+        return {'msg': None, 'error': '加载监控信息失败。'}
+
+    records = []
+    if isinstance(payload, dict):
+        records = payload.get('msg') or []
+    elif payload is not None:
+        records = payload
+
+    if not records:
+        logger.info('Monitor %s not found', monitor_id)
+        response.status = 404
+        return {'msg': [], 'error': '未找到监控信息。'}
+
+    response.status = 200
+    return payload
 # run(host='localhost', port=8080, reloader=True, server='wsgiref')
 
 
