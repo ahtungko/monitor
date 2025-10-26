@@ -16,6 +16,12 @@ const ui = {
     formTemplate: document.getElementById('monitor-form-template'),
 };
 
+const summaryOutputs = {
+    total: document.querySelector('[data-summary="total"] [data-summary-value]'),
+    upcoming: document.querySelector('[data-summary="upcoming"] [data-summary-value]'),
+    healthy: document.querySelector('[data-summary="healthy"] [data-summary-value]'),
+};
+
 if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.modalBody || !ui.modalTitle) {
     // Required DOM anchors are missing; bail out gracefully.
     console.warn('[frontend] Required DOM nodes not found. Frontend logic aborted.');
@@ -152,8 +158,46 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
         ui.monitorList.append(container);
     }
 
+    function updateSummary(monitors = []) {
+        if (!summaryOutputs.total && !summaryOutputs.upcoming && !summaryOutputs.healthy) {
+            return;
+        }
+        const list = Array.isArray(monitors) ? monitors : [];
+        let upcomingCount = 0;
+        let healthyCount = 0;
+
+        for (const item of list) {
+            if (!Array.isArray(item)) {
+                continue;
+            }
+            const validUntil = item[4];
+            const rawState = item[7];
+
+            const expiryStatus = resolveExpiryStatus(validUntil);
+            if (expiryStatus.variant === 'warning') {
+                upcomingCount += 1;
+            }
+
+            const cookieStatus = resolveCookieStatus(rawState);
+            if (cookieStatus.variant === 'success') {
+                healthyCount += 1;
+            }
+        }
+
+        if (summaryOutputs.total) {
+            summaryOutputs.total.textContent = String(list.length);
+        }
+        if (summaryOutputs.upcoming) {
+            summaryOutputs.upcoming.textContent = String(upcomingCount);
+        }
+        if (summaryOutputs.healthy) {
+            summaryOutputs.healthy.textContent = String(healthyCount);
+        }
+    }
+
     function updateMonitors(monitors) {
         state.monitors = Array.isArray(monitors) ? monitors : [];
+        updateSummary(state.monitors);
         renderMonitors();
     }
 
@@ -709,6 +753,7 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
     }
 
     function init() {
+        updateSummary(state.monitors);
         hydrateFromCache();
         if (state.offline) {
             setBanner('当前处于离线状态，正在显示缓存内容。', 'offline', { persist: true });
