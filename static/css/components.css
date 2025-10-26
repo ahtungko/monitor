@@ -25,6 +25,127 @@
   }
 }
 
+.app-shell {
+  display: grid;
+  gap: clamp(1.75rem, 4vw, 3rem);
+}
+
+.app-shell__headline {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.app-shell__eyebrow {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-brand-strong);
+}
+
+.app-shell__subtitle {
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+
+.app-shell__controls {
+  display: flex;
+  justify-content: center;
+}
+
+.app-shell__metrics {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+}
+
+.metric-card {
+  padding: clamp(1rem, 3vw, 1.5rem);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-muted);
+  display: grid;
+  gap: var(--space-2);
+  min-height: 100%;
+  box-shadow: var(--shadow-xs);
+  transition: border-color var(--transition-medium), box-shadow var(--transition-medium), background-color var(--transition-medium);
+}
+
+.metric-card:hover,
+.metric-card:focus-within {
+  border-color: rgba(14, 165, 233, 0.35);
+  box-shadow: var(--shadow-sm);
+  background: rgba(14, 165, 233, 0.08);
+}
+
+.metric-card__label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+}
+
+.metric-card__value {
+  font-size: clamp(1.6rem, 3vw, 2.2rem);
+  font-weight: 700;
+  color: var(--color-text-primary);
+  line-height: 1;
+}
+
+.metric-card__hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+}
+
+.metric-card output {
+  display: block;
+}
+
+.app-shell__main {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.monitor-collection {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.monitor-collection__header {
+  display: grid;
+  gap: var(--space-1);
+  text-align: left;
+}
+
+.monitor-collection__title {
+  margin: 0;
+  font-size: clamp(1.25rem, 3vw, 1.5rem);
+  font-weight: 700;
+}
+
+.monitor-collection__subtitle {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 0.95rem;
+}
+
+.monitor-collection__grid {
+  width: 100%;
+}
+
+@media (min-width: 768px) {
+  .hero.app-shell__header {
+    text-align: left;
+    align-items: center;
+  }
+
+  .app-shell__controls {
+    justify-content: flex-end;
+  }
+}
+
 .hero {
   display: grid;
   gap: var(--space-3);
@@ -538,6 +659,9 @@
   }
   .monitor-card__actions {
     justify-content: flex-start;
+  }
+  .monitor-collection__header {
+    text-align: center;
   }
 }
 
