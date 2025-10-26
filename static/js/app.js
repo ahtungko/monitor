@@ -37,7 +37,7 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
     let bannerTimeoutId = null;
 
     const MALAYSIA_TIME_ZONE = 'Asia/Kuala_Lumpur';
-    const MALAYSIA_TIME_SUFFIX = 'Malaysia time (MYT)';
+    const MALAYSIA_TIME_SUFFIX = 'MYT';
     const ONE_DAY_IN_MS = 24 * 60 * 60 * 1000;
 
     const modalManager = createModalManager({
@@ -178,6 +178,7 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
                 rawState,
                 expiryIso,
             ] = item;
+            const updateTimeIso = updateTime ?? null;
             return {
                 id,
                 name,
@@ -185,12 +186,14 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
                 creationDate,
                 expiryDisplay,
                 location,
-                updateTime,
+                updateTimeIso,
+                updateTimeDisplay: formatMalaysiaDateTime(updateTimeIso),
                 rawState,
                 expiryIso,
             };
         }
         if (typeof item === 'object') {
+            const updateTimeIso = item.updateTime ?? item.updatedAt ?? null;
             return {
                 id: item.id ?? item.monitorId ?? null,
                 name: item.name ?? null,
@@ -198,7 +201,8 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
                 creationDate: item.creationDate ?? item.createdAt ?? null,
                 expiryDisplay: item.expiryDisplay ?? item.validUntilDisplay ?? item.validUntil ?? '',
                 location: item.location ?? null,
-                updateTime: item.updateTime ?? item.updatedAt ?? null,
+                updateTimeIso,
+                updateTimeDisplay: formatMalaysiaDateTime(updateTimeIso),
                 rawState: item.state ?? item.rawState ?? null,
                 expiryIso: item.expiryIso ?? item.expiryUTC ?? item.expiryUtc ?? null,
             };
@@ -279,7 +283,7 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
             creationDate,
             expiryDisplay,
             location,
-            updateTime,
+            updateTimeDisplay,
             rawState,
             expiryIso,
         } = item;
@@ -335,7 +339,7 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
         meta.append(
             createMetaRow('Cookie 状态', createStatusBadge(cookieStatus.label, cookieStatus.variant)),
             createMetaRow('过期时间', expiry.display || '—'),
-            createMetaRow('最近查询时间', updateTime || '—'),
+            createMetaRow('最近查询时间', updateTimeDisplay || '—'),
             createMetaRow('位置', location || '—'),
             createMetaRow('创建时间', creationDate || '—'),
         );
@@ -381,7 +385,11 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
         if (!value) {
             return null;
         }
-        const date = new Date(value);
+        let normalized = value;
+        if (typeof normalized === 'string' && normalized.includes('.')) {
+            normalized = normalized.replace(/(\.\d{3})\d+/, '$1');
+        }
+        const date = new Date(normalized);
         if (Number.isNaN(date.getTime())) {
             return null;
         }
@@ -395,7 +403,7 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
         const datePart = new Intl.DateTimeFormat('en-GB', {
             timeZone: MALAYSIA_TIME_ZONE,
             day: 'numeric',
-            month: 'long',
+            month: 'short',
             year: 'numeric',
         }).format(date);
         let timePart = new Intl.DateTimeFormat('en-GB', {
@@ -403,13 +411,22 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
             hour: 'numeric',
             minute: '2-digit',
             hour12: true,
-        }).format(date).toLowerCase();
-        if (timePart.endsWith(':00 am')) {
-            timePart = timePart.replace(':00 am', 'am');
-        } else if (timePart.endsWith(':00 pm')) {
-            timePart = timePart.replace(':00 pm', 'pm');
+        }).format(date).toUpperCase();
+        if (timePart.startsWith('0')) {
+            timePart = timePart.slice(1);
         }
-        return `${datePart} ${timePart} ${MALAYSIA_TIME_SUFFIX}`;
+        return `${datePart}, ${timePart} ${MALAYSIA_TIME_SUFFIX}`;
+    }
+
+    function formatMalaysiaDateTime(value) {
+        if (!value) {
+            return '';
+        }
+        const date = value instanceof Date ? value : parseExpiryIso(value);
+        if (!date) {
+            return '';
+        }
+        return formatMalaysiaDisplay(date);
     }
 
     function resolveExpiryStatus(expiryIso, fallbackDisplay) {
