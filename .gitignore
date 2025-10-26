@@ -2,3 +2,5 @@
 /.vscode
 /README.md
 /__pycache__
+monitor.db
+config.ini
