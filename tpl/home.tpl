@@ -10,7 +10,9 @@
     <link rel="manifest" href="/manifest.json">
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/app-icon-192.png">
     <link rel="apple-touch-icon" href="/icons/app-icon-192.png">
-    <link rel="stylesheet" type="text/css" href="/css/home.css">
+    <link rel="stylesheet" href="/css/pico.min.css">
+    <link rel="stylesheet" href="/css/theme.css">
+    <link rel="stylesheet" href="/css/components.css">
 </head>
 
 <body>
