@@ -6,6 +6,7 @@ import sqlite3
 import pytz
 
 DB_PATH = 'monitor.db'
+PENDING_STATE = 2
 
 JAKARTA_TZ = pytz.timezone('Asia/Jakarta')
 MALAYSIA_TZ = pytz.timezone('Asia/Kuala_Lumpur')
@@ -210,7 +211,10 @@ def update_expiry_utc(id, expiry_iso):
 def addSql(name, ops, cookie):
     conn = connSqlite()
     exec = conn.cursor()
-    exec.execute("insert into vps(name, ops, cookie) values(?, ?, ?)",(name, ops, cookie))
+    exec.execute(
+        "insert into vps(name, ops, cookie, state) values(?, ?, ?, ?)",
+        (name, ops, cookie, PENDING_STATE),
+    )
     conn.commit()
     conn.close()
 

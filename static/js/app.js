@@ -378,7 +378,13 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
         if (numeric === 1) {
             return { label: '正常', variant: 'success' };
         }
-        return { label: '异常', variant: 'danger' };
+        if (numeric === 2) {
+            return { label: '检测中', variant: 'neutral' };
+        }
+        if (numeric === 0) {
+            return { label: '异常', variant: 'danger' };
+        }
+        return { label: '未知', variant: 'neutral' };
     }
 
     function parseExpiryIso(value) {
