@@ -123,13 +123,30 @@ def selectAllInfo():
         return{'msg': res}
 def selectAllInfo_Info():
     res = selectSql()
-    if res == []:
-        return {'msg' : None}
-    else:
-        data = []
-        for vps in res:
-            data.append((vps[0],vps[1],vps[2],vps[4],vps[5],vps[6],vps[10],vps[11]))
-        return{'msg': data}
+    if not res:
+        return {'msg': None}
+    data = []
+    for vps in res:
+        expiry_dt, expiry_iso, expiry_display = resolve_expiry_values(
+            vps['creation_date'], vps['valid_until'], vps['expiry_utc']
+        )
+        if expiry_iso and vps['expiry_utc'] != expiry_iso:
+            update_expiry_utc(vps['id'], expiry_iso)
+        display_value = expiry_display or '—'
+        data.append(
+            (
+                vps['id'],
+                vps['name'],
+                vps['ops'],
+                vps['creation_date'],
+                display_value,
+                vps['location'],
+                vps['update_time'],
+                vps['state'],
+                expiry_iso,
+            )
+        )
+    return {'msg': data}
 def selectVPSForId(id):
     res = selectSql_VPS_ID(id)
     return {'msg': res}
@@ -145,44 +162,40 @@ def updateVPS(list):
         return{'msg':f'修改成功'}
     except Exception as e:
         return{'msg':f'修改失败{e}'}
+
 def checkDateTime():
     res = selectSql()
-    #print(res)
-    # res = [(3, 'J', 'vc', 'PHPSESSID=dnjdn', 'November 05, 2023', 'November 24, 2023', 'EU1-LON-kvm', '2001:41d0:800:29c6:9ec1:306e:e923:f653', '512 MB', '5 GB', '2023-11-23 08:51:06.971761', 1)]
-    if len(res) != 0:
-        try:
-            for vps in res:
-                # 将PST时间字符串转换为datetime对象，并设置时区为America/Los_Angeles
-                pst_time = datetime.datetime.strptime(vps[5], "%B %d, %Y").replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=pytz.timezone('America/Los_Angeles'))
-                #pst_time = datetime.datetime.strptime(vps[5], "%B %d, %Y").replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=pytz.timezone('Asia/Kuala_Lumpur'))
-                # 在PST时间上加上23小时59分59秒
-                # pst_time = pst_time + datetime.timedelta(hours=23, minutes=59, seconds=59) + datetime.timedelta(minutes=7)
-                # 将时区转换为Asia/Shanghai，并格式化为UTC+8时间字符串
-                utc_time = pst_time.astimezone(pytz.timezone('Asia/Kuala_Lumpur'))
-                delta_time = utc_time - datetime.datetime.now(pytz.timezone('Asia/Kuala_Lumpur')) 
-                if datetime.timedelta(days=0) < delta_time < datetime.timedelta(days=3):
-                    # print(f'小于5天{delta_time}')
-                    vpsType = vps[2].lower()
-                    if vpsType == "vc":
-                        sendMsg(vps[0], f"你的{vps[2]}小鸡\n名称:{vps[1]}即将到期\n到期时间为{utc_time}\n距离到期还剩下{delta_time}\n[Renew](https://free.vps.vc/vps-renew)", "Markdown")
-                    elif vpsType == "hax":
-                        sendMsg(vps[0], f"你的{vps[2]}小鸡\n名称:{vps[1]}即将到期\n到期时间为{utc_time}\n距离到期还剩下{delta_time}\n[Renew](https://hax.co.id/vps-renew/)", "Markdown")
-                    elif vpsType == "woiden":
-                        sendMsg(vps[0], f"你的{vps[2]}小鸡\n名称:{vps[1]}即将到期\n到期时间为{utc_time}\n距离到期还剩下{delta_time}\n[Renew](https://woiden.id/vps-renew/)", "Markdown")
-                    else:
-                        sendMsg(vps[0], f"出问题了咯，请检查看看")
-                   
-                   # python 3.10+ only
-                    # match vpsType:
-                    #     case "vc":
-                    #         sendMsg(vps[0], f"你的{vps[2]}小鸡\n名称:{vps[1]}即将到期\n到期时间为{utc_time}\n距离到期还剩下{delta_time}\n[Renew](https://free.vps.vc/vps-renew)", "Markdown")
-                    #     case "hax":
-                    #         sendMsg(vps[0], f"你的{vps[2]}小鸡\n名称:{vps[1]}即将到期\n到期时间为{utc_time}\n距离到期还剩下{delta_time}\n[Renew](https://hax.co.id/vps-renew/)", "Markdown")
-                    #     case "woiden":
-                    #         sendMsg(vps[0], f"你的{vps[2]}小鸡\n名称:{vps[1]}即将到期\n到期时间为{utc_time}\n距离到期还剩下{delta_time}\n[Renew](https://woiden.id/vps-renew/)", "Markdown")
-                    #     case _:
-                    #         sendMsg(vps[0], f"出问题了咯， 请检查看看")
-                # else:
-                #     print(f'大于5天{delta_time}')
-        except:
-            pass
+    if not res:
+        return
+    try:
+        for vps in res:
+            expiry_dt, expiry_iso, expiry_display = resolve_expiry_values(
+                vps['creation_date'], vps['valid_until'], vps['expiry_utc']
+            )
+            if expiry_iso and vps['expiry_utc'] != expiry_iso:
+                update_expiry_utc(vps['id'], expiry_iso)
+            if expiry_dt is None:
+                continue
+            now_utc = datetime.datetime.now(datetime.timezone.utc)
+            delta_time = expiry_dt - now_utc
+            if datetime.timedelta(days=0) < delta_time <= datetime.timedelta(days=3):
+                ops_label = vps['ops'] or ''
+                name_label = vps['name'] or ''
+                vps_type = str(ops_label).lower()
+                pretty_time = expiry_display or format_malaysia_display(expiry_dt)
+                message = (
+                    f"你的{ops_label}小鸡\n"
+                    f"名称:{name_label}即将到期\n"
+                    f"到期时间为{pretty_time}\n"
+                    f"距离到期还剩下{delta_time}\n"
+                )
+                if vps_type == "vc":
+                    sendMsg(vps['id'], f"{message}[Renew](https://free.vps.vc/vps-renew)", "Markdown")
+                elif vps_type == "hax":
+                    sendMsg(vps['id'], f"{message}[Renew](https://hax.co.id/vps-renew/)", "Markdown")
+                elif vps_type == "woiden":
+                    sendMsg(vps['id'], f"{message}[Renew](https://woiden.id/vps-renew/)", "Markdown")
+                else:
+                    sendMsg(vps['id'], "出问题了咯，请检查看看")
+    except Exception:
+        pass
