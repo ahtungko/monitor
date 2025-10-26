@@ -36,6 +36,10 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
 
     let bannerTimeoutId = null;
 
+    const MALAYSIA_TIME_ZONE = 'Asia/Kuala_Lumpur';
+    const MALAYSIA_TIME_SUFFIX = 'Malaysia time (MYT)';
+    const ONE_DAY_IN_MS = 24 * 60 * 60 * 1000;
+
     const modalManager = createModalManager({
         modal: ui.modal,
         overlay: ui.modalOverlay,
@@ -158,6 +162,50 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
         ui.monitorList.append(container);
     }
 
+    function normalizeMonitor(item) {
+        if (!item) {
+            return null;
+        }
+        if (Array.isArray(item)) {
+            const [
+                id,
+                name,
+                ops,
+                creationDate,
+                expiryDisplay,
+                location,
+                updateTime,
+                rawState,
+                expiryIso,
+            ] = item;
+            return {
+                id,
+                name,
+                ops,
+                creationDate,
+                expiryDisplay,
+                location,
+                updateTime,
+                rawState,
+                expiryIso,
+            };
+        }
+        if (typeof item === 'object') {
+            return {
+                id: item.id ?? item.monitorId ?? null,
+                name: item.name ?? null,
+                ops: item.ops ?? item.provider ?? null,
+                creationDate: item.creationDate ?? item.createdAt ?? null,
+                expiryDisplay: item.expiryDisplay ?? item.validUntilDisplay ?? item.validUntil ?? '',
+                location: item.location ?? null,
+                updateTime: item.updateTime ?? item.updatedAt ?? null,
+                rawState: item.state ?? item.rawState ?? null,
+                expiryIso: item.expiryIso ?? item.expiryUTC ?? item.expiryUtc ?? null,
+            };
+        }
+        return null;
+    }
+
     function updateSummary(monitors = []) {
         if (!summaryOutputs.total && !summaryOutputs.upcoming && !summaryOutputs.healthy) {
             return;
@@ -167,18 +215,15 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
         let healthyCount = 0;
 
         for (const item of list) {
-            if (!Array.isArray(item)) {
+            if (!item) {
                 continue;
             }
-            const validUntil = item[4];
-            const rawState = item[7];
-
-            const expiryStatus = resolveExpiryStatus(validUntil);
+            const expiryStatus = resolveExpiryStatus(item.expiryIso, item.expiryDisplay);
             if (expiryStatus.variant === 'warning') {
                 upcomingCount += 1;
             }
 
-            const cookieStatus = resolveCookieStatus(rawState);
+            const cookieStatus = resolveCookieStatus(item.rawState);
             if (cookieStatus.variant === 'success') {
                 healthyCount += 1;
             }
@@ -196,7 +241,10 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
     }
 
     function updateMonitors(monitors) {
-        state.monitors = Array.isArray(monitors) ? monitors : [];
+        const normalized = Array.isArray(monitors)
+            ? monitors.map(normalizeMonitor).filter((item) => item !== null)
+            : [];
+        state.monitors = normalized;
         updateSummary(state.monitors);
         renderMonitors();
     }
@@ -219,15 +267,30 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
     }
 
     function buildMonitorCard(item) {
-        const [id, name, ops, creationDate, validUntil, location, updateTime, rawState] = item;
-        const expiry = resolveExpiryStatus(validUntil);
+        if (!item) {
+            const placeholder = document.createElement('article');
+            placeholder.className = 'monitor-card';
+            return placeholder;
+        }
+        const {
+            id,
+            name,
+            ops,
+            creationDate,
+            expiryDisplay,
+            location,
+            updateTime,
+            rawState,
+            expiryIso,
+        } = item;
+        const expiry = resolveExpiryStatus(expiryIso, expiryDisplay);
         const cookieStatus = resolveCookieStatus(rawState);
         const displayName = name || '未命名实例';
         const displayOps = ops ? ops.toUpperCase() : '未知';
 
         const card = document.createElement('article');
         card.className = 'monitor-card';
-        card.dataset.monitorId = id;
+        card.dataset.monitorId = id != null ? String(id) : '';
 
         const header = document.createElement('div');
         header.className = 'monitor-card__header';
@@ -251,7 +314,7 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
         editButton.type = 'button';
         editButton.className = 'ghost-btn';
         editButton.dataset.action = 'edit';
-        editButton.dataset.id = id;
+        editButton.dataset.id = id != null ? String(id) : '';
         editButton.dataset.name = displayName;
         editButton.textContent = '修改';
 
@@ -259,7 +322,7 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
         deleteButton.type = 'button';
         deleteButton.className = 'danger-btn';
         deleteButton.dataset.action = 'delete';
-        deleteButton.dataset.id = id;
+        deleteButton.dataset.id = id != null ? String(id) : '';
         deleteButton.dataset.name = displayName;
         deleteButton.textContent = '删除';
 
@@ -314,51 +377,55 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
         return { label: '异常', variant: 'danger' };
     }
 
-    function resolveExpiryStatus(validUntil) {
-        if (!validUntil) {
-            return { label: '无状态', variant: 'neutral', display: '—' };
+    function parseExpiryIso(value) {
+        if (!value) {
+            return null;
         }
-        const { iso, display } = toUtc8Display(validUntil);
-        if (!iso) {
-            return { label: '无状态', variant: 'neutral', display: '—' };
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) {
+            return null;
         }
-        const expiry = new Date(iso);
-        if (Number.isNaN(expiry.getTime())) {
-            return { label: '无状态', variant: 'neutral', display: display || '—' };
-        }
-        const diffDays = (expiry.getTime() - Date.now()) / (1000 * 60 * 60 * 24);
-        if (diffDays > 3) {
-            return { label: '正常', variant: 'success', display };
-        }
-        if (diffDays > 0 && diffDays <= 3) {
-            return { label: '待续期', variant: 'warning', display };
-        }
-        if (diffDays < 0 || diffDays > 10) {
-            return { label: '已过期', variant: 'danger', display };
-        }
-        return { label: '无状态', variant: 'neutral', display };
+        return date;
     }
 
-    function toUtc8Display(validUntil) {
-        if (!validUntil) {
-            return { iso: null, display: '' };
+    function formatMalaysiaDisplay(date) {
+        if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
+            return '';
         }
-        const pstTime = new Date(`${validUntil} 00:00:00 PST`);
-        if (Number.isNaN(pstTime.getTime())) {
-            return { iso: null, display: '' };
+        const datePart = new Intl.DateTimeFormat('en-GB', {
+            timeZone: MALAYSIA_TIME_ZONE,
+            day: 'numeric',
+            month: 'long',
+            year: 'numeric',
+        }).format(date);
+        let timePart = new Intl.DateTimeFormat('en-GB', {
+            timeZone: MALAYSIA_TIME_ZONE,
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true,
+        }).format(date).toLowerCase();
+        if (timePart.endsWith(':00 am')) {
+            timePart = timePart.replace(':00 am', 'am');
+        } else if (timePart.endsWith(':00 pm')) {
+            timePart = timePart.replace(':00 pm', 'pm');
         }
-        pstTime.setHours(pstTime.getHours() + 23);
-        pstTime.setMinutes(pstTime.getMinutes() + 59);
-        pstTime.setSeconds(pstTime.getSeconds() + 59);
-        const timeZoneOffset = new Date().getTimezoneOffset() * 60 * 1000;
-        const utcTimestamp = pstTime.getTime() - timeZoneOffset;
-        const utcTime = new Date(utcTimestamp);
-        if (Number.isNaN(utcTime.getTime())) {
-            return { iso: null, display: '' };
+        return `${datePart} ${timePart} ${MALAYSIA_TIME_SUFFIX}`;
+    }
+
+    function resolveExpiryStatus(expiryIso, fallbackDisplay) {
+        const expiryDate = parseExpiryIso(expiryIso);
+        const display = fallbackDisplay || (expiryDate ? formatMalaysiaDisplay(expiryDate) : '');
+        if (!expiryDate) {
+            return { label: '无状态', variant: 'neutral', display: display || '—' };
         }
-        const iso = utcTime.toISOString();
-        const display = `${iso.replace('T', ' ').replace('Z', '').substring(0, 19)} UTC+8`;
-        return { iso, display };
+        const diffDays = (expiryDate.getTime() - Date.now()) / ONE_DAY_IN_MS;
+        if (diffDays > 3) {
+            return { label: '正常', variant: 'success', display: display || '—' };
+        }
+        if (diffDays > 0) {
+            return { label: '待续期', variant: 'warning', display: display || '—' };
+        }
+        return { label: '已过期', variant: 'danger', display: display || '—' };
     }
 
     function hydrateFromCache() {

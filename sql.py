@@ -1,14 +1,35 @@
 # -*- coding: utf-8 -*-
-import sqlite3, os, datetime
+import datetime
+import os
+import sqlite3
+
+import pytz
+
+DB_PATH = 'monitor.db'
+
+JAKARTA_TZ = pytz.timezone('Asia/Jakarta')
+MALAYSIA_TZ = pytz.timezone('Asia/Kuala_Lumpur')
+UTC = pytz.utc
+
+DATE_PATTERNS = (
+    '%Y-%m-%d',
+    '%Y/%m/%d',
+    '%B %d, %Y',
+    '%b %d, %Y',
+)
+
 
 def connSqlite():
-    conn = None
-    if os.path.exists(''):
-        conn = sqlite3.connect('monitor.db')
-    else:
-        conn = sqlite3.connect('monitor.db')
-        c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS vps
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    _ensure_schema(conn)
+    return conn
+
+
+def _ensure_schema(conn):
+    cursor = conn.cursor()
+    cursor.execute(
+        '''CREATE TABLE IF NOT EXISTS vps
                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT,
                     ops TEXT,
@@ -20,24 +41,117 @@ def connSqlite():
                     ram TEXT,
                     disk_total TEXT,
                     update_time TEXT,
-                    state INTEGER DEFAULT 0)
-                ''')
-
-        c.execute('''CREATE TABLE IF NOT EXISTS send
+                    state INTEGER DEFAULT 0,
+                    expiry_utc TEXT)
+                '''
+    )
+    cursor.execute(
+        '''CREATE TABLE IF NOT EXISTS send
                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
                     monitor_id INTEGER,
                     content TEXT,
                     flag INTEGER,
                     date TEXT DEFAULT (datetime('now', 'localtime')))
-                ''')
-        conn.commit()
-    return conn
+                '''
+    )
+    cursor.execute('PRAGMA table_info(vps)')
+    columns = {row[1] for row in cursor.fetchall()}
+    if 'expiry_utc' not in columns:
+        cursor.execute('ALTER TABLE vps ADD COLUMN expiry_utc TEXT')
+    conn.commit()
+
+
+def _parse_date_string(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    for pattern in DATE_PATTERNS:
+        try:
+            return datetime.datetime.strptime(text, pattern).date()
+        except ValueError:
+            continue
+    try:
+        normalized = text.replace('Z', '+00:00') if 'Z' in text else text
+        parsed = datetime.datetime.fromisoformat(normalized)
+        return parsed.date()
+    except ValueError:
+        return None
+
+
+def _parse_iso_datetime(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    normalized = text.replace('Z', '+00:00') if 'Z' in text else text
+    try:
+        parsed = datetime.datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    return parsed.astimezone(UTC)
+
+
+def calculate_expiry_utc(creation_value, valid_value):
+    renewal_date = _parse_date_string(creation_value)
+    if renewal_date is None:
+        valid_date = _parse_date_string(valid_value)
+        if valid_date is not None:
+            renewal_date = valid_date - datetime.timedelta(days=5)
+    if renewal_date is None:
+        return None
+    expiry_date = renewal_date + datetime.timedelta(days=5)
+    expiry_naive = datetime.datetime.combine(expiry_date, datetime.time(0, 0, 0))
+    expiry_local = JAKARTA_TZ.localize(expiry_naive)
+    return expiry_local.astimezone(UTC)
+
+
+def format_malaysia_display(expiry_dt_utc):
+    if expiry_dt_utc is None:
+        return ''
+    target = expiry_dt_utc.astimezone(MALAYSIA_TZ)
+    date_part = target.strftime('%d %B %Y')
+    hour = target.strftime('%I').lstrip('0') or '0'
+    minute = target.strftime('%M')
+    suffix = target.strftime('%p').lower()
+    if minute == '00':
+        time_part = f'{hour}{suffix}'
+    else:
+        time_part = f'{hour}:{minute}{suffix}'
+    return f'{date_part} {time_part} Malaysia time (MYT)'
+
+
+def resolve_expiry_values(creation_value, valid_value, expiry_value):
+    expiry_dt = _parse_iso_datetime(expiry_value)
+    if expiry_dt is None:
+        expiry_dt = calculate_expiry_utc(creation_value, valid_value)
+    if expiry_dt is None:
+        return None, None, ''
+    expiry_utc = expiry_dt.astimezone(UTC)
+    return expiry_utc, expiry_utc.isoformat(), format_malaysia_display(expiry_utc)
+
+
+def update_expiry_utc(id, expiry_iso):
+    if not expiry_iso:
+        return
+    conn = connSqlite()
+    cursor = conn.cursor()
+    cursor.execute('update vps set expiry_utc=? where id=?', (expiry_iso, id))
+    conn.commit()
+    conn.close()
+
 def addSql(name, ops, cookie):
     conn = connSqlite()
     exec = conn.cursor()
     exec.execute("insert into vps(name, ops, cookie) values(?, ?, ?)",(name, ops, cookie))
     conn.commit()
     conn.close()
+
+
 def selectSql():
     conn = connSqlite()
     exec = conn.cursor()
@@ -45,6 +159,8 @@ def selectSql():
     res = exec.fetchall()
     conn.close()
     return res
+
+
 def selectSql_VPS_ID(id):
     conn = connSqlite()
     exec = conn.cursor()
@@ -52,38 +168,64 @@ def selectSql_VPS_ID(id):
     res = exec.fetchall()
     conn.close()
     return res
-def updateInfoSql(creation_date,valid_until,location,ipv6,ram,disk_total,id):
+
+
+def updateInfoSql(creation_date, valid_until, location, ipv6, ram, disk_total, id):
     conn = connSqlite()
-    exec = conn.cursor()
-    exec.execute("update vps set creation_date=?, valid_until=?, location=?, ipv6=?, ram=?, disk_total=?, update_time=?, state=? where id=?",(
-        creation_date,valid_until,location,ipv6,ram,disk_total, datetime.datetime.now(), 1, id
-    ))
+    cursor = conn.cursor()
+    expiry_dt = calculate_expiry_utc(creation_date, valid_until)
+    expiry_iso = expiry_dt.isoformat() if expiry_dt is not None else None
+    cursor.execute(
+        "update vps set creation_date=?, valid_until=?, location=?, ipv6=?, ram=?, disk_total=?, update_time=?, state=?, expiry_utc=? where id=?",
+        (
+            creation_date,
+            valid_until,
+            location,
+            ipv6,
+            ram,
+            disk_total,
+            datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            1,
+            expiry_iso,
+            id,
+        ),
+    )
     conn.commit()
     conn.close()
+
+
 def updateState(state, id):
     conn = connSqlite()
     exec = conn.cursor()
     exec.execute("update vps set state=? where id=?",(state, id))
     conn.commit()
     conn.close()
+
+
 def updateVps(name, ops, cookie, id):
     conn = connSqlite()
     exec = conn.cursor()
     exec.execute("update vps set name=?, ops=?, cookie=? where id=?",(name, ops, cookie, id))
     conn.commit()
     conn.close()
+
+
 def deleteVps(id):
     conn = connSqlite()
     exec = conn.cursor()
     exec.execute("delete from vps where id=?",(id,))
     conn.commit()
     conn.close()
+
+
 def addSend(m_id, msg, flag):
     conn = connSqlite()
     exec = conn.cursor()
     exec.execute("insert into send(monitor_id, content, flag) values(?, ?, ?)",(m_id, msg, flag))
     conn.commit()
     conn.close()
+
+
 def selectSend(m_id, flag):
     conn = connSqlite()
     exec = conn.cursor()
