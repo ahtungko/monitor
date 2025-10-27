@@ -37,59 +37,63 @@
             </div>
         </header>
 
-        <section class="app-shell__metrics" aria-labelledby="summaryTitle">
-            <h2 id="summaryTitle" class="visually-hidden">监控概览</h2>
-            <article class="metric-card" data-summary-card data-summary="total">
-                <p class="metric-card__label">监控总数</p>
-                <output class="metric-card__value" name="total-monitors" data-summary-value>--</output>
-                <p class="metric-card__hint">当前正在追踪的监控实例。</p>
-            </article>
-            <article class="metric-card" data-summary-card data-summary="upcoming">
-                <p class="metric-card__label">即将到期</p>
-                <output class="metric-card__value" name="upcoming-renewals" data-summary-value>--</output>
-                <p class="metric-card__hint">需要留意续费的实例数量。</p>
-            </article>
-            <article class="metric-card" data-summary-card data-summary="healthy">
-                <p class="metric-card__label">Cookie 正常</p>
-                <output class="metric-card__value" name="healthy-cookies" data-summary-value>--</output>
-                <p class="metric-card__hint">状态良好的 Cookie 数量。</p>
-            </article>
-        </section>
+        <div class="app-shell__layout">
+            <aside class="app-shell__sidebar">
+                <section class="app-shell__metrics" aria-labelledby="summaryTitle">
+                    <h2 id="summaryTitle" class="visually-hidden">监控概览</h2>
+                    <article class="metric-card" data-summary-card data-summary="total">
+                        <p class="metric-card__label">监控总数</p>
+                        <output class="metric-card__value" name="total-monitors" data-summary-value>--</output>
+                        <p class="metric-card__hint">当前正在追踪的监控实例。</p>
+                    </article>
+                    <article class="metric-card" data-summary-card data-summary="upcoming">
+                        <p class="metric-card__label">即将到期</p>
+                        <output class="metric-card__value" name="upcoming-renewals" data-summary-value>--</output>
+                        <p class="metric-card__hint">需要留意续费的实例数量。</p>
+                    </article>
+                    <article class="metric-card" data-summary-card data-summary="healthy">
+                        <p class="metric-card__label">Cookie 正常</p>
+                        <output class="metric-card__value" name="healthy-cookies" data-summary-value>--</output>
+                        <p class="metric-card__hint">状态良好的 Cookie 数量。</p>
+                    </article>
+                </section>
 
-        <section id="notificationSettings" class="notification-settings hidden" aria-labelledby="notificationSettingsTitle">
-            <h2 id="notificationSettingsTitle" class="notification-settings__title">通知设置</h2>
-            <div class="notification-settings__content">
-                <div class="notification-settings__status">
-                    <div class="notification-status">
-                        <span class="notification-status__label">浏览器通知权限：</span>
-                        <span id="notificationPermissionStatus" class="notification-status__value">检查中...</span>
+                <section id="notificationSettings" class="notification-settings hidden" aria-labelledby="notificationSettingsTitle">
+                    <h2 id="notificationSettingsTitle" class="notification-settings__title">通知设置</h2>
+                    <div class="notification-settings__content">
+                        <div class="notification-settings__status">
+                            <div class="notification-status">
+                                <span class="notification-status__label">浏览器通知权限：</span>
+                                <span id="notificationPermissionStatus" class="notification-status__value">检查中...</span>
+                            </div>
+                            <div class="notification-status">
+                                <span class="notification-status__label">通知开关：</span>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="notificationToggle" aria-label="启用或禁用通知">
+                                    <span class="toggle-switch__slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="notification-settings__actions">
+                            <button id="requestPermissionBtn" class="secondary-btn" type="button">请求通知权限</button>
+                            <button id="testNotificationBtn" class="secondary-btn" type="button">测试通知</button>
+                            <button id="openBrowserNotificationSettingsBtn" class="ghost-btn" type="button">浏览器通知设置</button>
+                        </div>
+                        <p class="notification-settings__hint" id="notificationSupportHint"></p>
                     </div>
-                    <div class="notification-status">
-                        <span class="notification-status__label">通知开关：</span>
-                        <label class="toggle-switch">
-                            <input type="checkbox" id="notificationToggle" aria-label="启用或禁用通知">
-                            <span class="toggle-switch__slider"></span>
-                        </label>
-                    </div>
-                </div>
-                <div class="notification-settings__actions">
-                    <button id="requestPermissionBtn" class="secondary-btn" type="button">请求通知权限</button>
-                    <button id="testNotificationBtn" class="secondary-btn" type="button">测试通知</button>
-                    <button id="openBrowserNotificationSettingsBtn" class="ghost-btn" type="button">浏览器通知设置</button>
-                </div>
-                <p class="notification-settings__hint" id="notificationSupportHint"></p>
-            </div>
-        </section>
+                </section>
+            </aside>
 
-        <main id="mainContent" class="app-shell__main" tabindex="-1">
-            <section class="monitor-collection" aria-labelledby="monitorSectionTitle">
-                <div class="monitor-collection__header">
-                    <h2 id="monitorSectionTitle" class="monitor-collection__title">监控列表</h2>
-                    <p class="monitor-collection__subtitle">实时显示监控实例的 Cookie 状态与过期时间。</p>
-                </div>
-                <div id="monitorList" class="monitor-collection__grid monitor-list" data-monitor-list aria-live="polite" aria-busy="false"></div>
-            </section>
-        </main>
+            <main id="mainContent" class="app-shell__main app-shell__content" tabindex="-1">
+                <section class="monitor-collection" aria-labelledby="monitorSectionTitle">
+                    <div class="monitor-collection__header">
+                        <h2 id="monitorSectionTitle" class="monitor-collection__title">监控列表</h2>
+                        <p class="monitor-collection__subtitle">实时显示监控实例的 Cookie 状态与过期时间。</p>
+                    </div>
+                    <div id="monitorList" class="monitor-collection__grid monitor-list" data-monitor-list aria-live="polite" aria-busy="false"></div>
+                </section>
+            </main>
+        </div>
     </div>
 
     <div id="modalOverlay" class="modal-overlay hidden"></div>
