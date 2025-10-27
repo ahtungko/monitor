@@ -3,8 +3,12 @@
 
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#0ea5e9">
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0b1220">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="description" content="小鸡监控系统 - 自托管的 VPS 续期与 Cookie 状态监控面板。">
     <title>小鸡监控系统</title>
     <link rel="manifest" href="/manifest.json">

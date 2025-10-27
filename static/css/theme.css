@@ -54,6 +54,20 @@
   --color-status-danger-soft: rgba(239, 68, 68, 0.18);
   --color-status-neutral: #475569;
   --color-status-neutral-soft: rgba(148, 163, 184, 0.22);
+
+  --safe-area-top: 0px;
+  --safe-area-right: 0px;
+  --safe-area-bottom: 0px;
+  --safe-area-left: 0px;
+}
+
+@supports (top: env(safe-area-inset-top)) {
+  :root {
+    --safe-area-top: env(safe-area-inset-top);
+    --safe-area-right: env(safe-area-inset-right);
+    --safe-area-bottom: env(safe-area-inset-bottom);
+    --safe-area-left: env(safe-area-inset-left);
+  }
 }
 
 @media (prefers-color-scheme: dark) {
@@ -88,6 +102,10 @@ body {
   justify-content: center;
   align-items: stretch;
   padding: clamp(1.5rem, 4vw, 4rem) clamp(1rem, 3vw, 3rem) clamp(3.5rem, 6vw, 5.5rem);
+  padding-top: calc(var(--safe-area-top) + clamp(1.5rem, 4vw, 4rem));
+  padding-right: calc(var(--safe-area-right) + clamp(1rem, 3vw, 3rem));
+  padding-bottom: calc(var(--safe-area-bottom) + clamp(3.5rem, 6vw, 5.5rem));
+  padding-left: calc(var(--safe-area-left) + clamp(1rem, 3vw, 3rem));
   transition: background-color var(--transition-medium), color var(--transition-medium);
 }
 
@@ -200,6 +218,9 @@ textarea:focus {
 
 @media (max-width: 768px) {
   body {
-    padding: 1.5rem clamp(1rem, 6vw, 1.75rem) 3.75rem;
+    display: block;
+    justify-content: initial;
+    align-items: initial;
+    padding: calc(var(--safe-area-top) + 1.25rem) clamp(0.85rem, 5vw, 1.5rem) calc(var(--safe-area-bottom) + 1.75rem) clamp(0.85rem, 5vw, 1.5rem);
   }
 }
