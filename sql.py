@@ -279,10 +279,13 @@ def updateVps(name, ops, cookie, id):
 
 def deleteVps(id):
     conn = connSqlite()
-    exec = conn.cursor()
-    exec.execute("delete from vps where id=?",(id,))
-    conn.commit()
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("delete from vps where id=?", (id,))
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
 
 
 def addSend(m_id, msg, flag):

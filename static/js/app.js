@@ -837,18 +837,37 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
                 method: 'POST',
                 body: params,
             });
-            if (!response.ok) {
-                throw new Error(`删除失败，状态码 ${response.status}`);
+
+            let payload = null;
+            try {
+                payload = await response.json();
+            } catch (parseError) {
+                payload = null;
             }
-            const payload = await response.json();
-            const message = payload?.msg || '删除完成';
-            if (message.includes('成功')) {
+
+            const hasExplicitSuccess =
+                payload !== null && Object.prototype.hasOwnProperty.call(payload, 'success');
+            const messageText = typeof payload?.msg === 'string' ? payload.msg : '';
+            const errorText = typeof payload?.error === 'string' ? payload.error : '';
+
+            const success = response.ok
+                ? (hasExplicitSuccess ? payload.success === true : messageText.includes('成功'))
+                : (hasExplicitSuccess && payload.success === true);
+
+            if (success) {
+                const message = messageText || '删除完成';
                 showToast(message, 'success');
                 refreshData({ silent: true });
-            } else {
-                showToast(message, 'error');
-                setBanner(message, 'error', { persist: true });
+                return;
             }
+
+            const errorMessage =
+                errorText ||
+                (!response.ok && messageText ? messageText : '') ||
+                (response.ok ? '删除失败，请稍后再试。' : `删除失败，状态码 ${response.status}`);
+
+            showToast(errorMessage, 'error');
+            setBanner(errorMessage, 'error', { persist: true });
         } catch (error) {
             console.error('[frontend] Failed to delete monitor:', error);
             showToast('删除失败，请稍后再试。', 'error');

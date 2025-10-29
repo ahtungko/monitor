@@ -354,12 +354,29 @@ def selectVPSForId(id_value):
     return {'msg': normalized}
 
 
-def deleteVPS(id):
+def deleteVPS(raw_id):
+    id_text = '' if raw_id is None else str(raw_id).strip()
+    if not id_text:
+        message = '监控 ID 不能为空。'
+        return {'msg': f'删除失败, {message}', 'error': message, 'success': False, 'status': 400}
     try:
-        deleteVps(id)
-        return {'msg': '删除成功'}
-    except Exception as e:
-        return {'msg': f'删除失败,{e}'}
+        monitor_id = int(id_text)
+    except (TypeError, ValueError):
+        message = '监控 ID 格式不正确。'
+        return {'msg': f'删除失败, {message}', 'error': message, 'success': False, 'status': 400}
+
+    try:
+        affected = deleteVps(monitor_id)
+    except Exception as exc:
+        logger.exception('Failed to delete VPS %s: %s', id_text, exc)
+        error_message = f'删除失败, {exc}'
+        return {'msg': error_message, 'error': str(exc), 'success': False, 'status': 500}
+
+    if affected:
+        return {'msg': '删除成功', 'success': True, 'status': 200}
+
+    message = '未找到对应监控。'
+    return {'msg': f'删除失败, {message}', 'error': message, 'success': False, 'status': 404}
 
 
 def updateVPS(list):
