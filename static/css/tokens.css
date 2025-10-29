@@ -1,0 +1,199 @@
+/*
+ * tokens.css
+ * Modern minimalist design tokens for the renewal monitoring dashboard.
+ *
+ * Color palette (light mode):
+ *   neutral-50   #f8fafc   | base page background
+ *   neutral-100  #eef2f6   | muted surfaces
+ *   neutral-200  #e2e8f0   | soft borders
+ *   neutral-700  #334155   | secondary text
+ *   neutral-900  #0f172a   | primary text
+ *   accent       #2563eb   | brand blue accent
+ *   success      #16a34a   | positive state
+ *   warning      #f59e0b   | cautionary state
+ *   danger       #dc2626   | destructive state
+ *
+ * Typography scale (12–32px):
+ *   --font-size-2xs · 0.75rem (12px)
+ *   --font-size-xs  · 0.8125rem (13px)
+ *   --font-size-sm  · 0.875rem (14px)
+ *   --font-size-md  · 1rem (16px)
+ *   --font-size-lg  · 1.125rem (18px)
+ *   --font-size-xl  · 1.375rem (22px)
+ *   --font-size-2xl · 1.75rem (28px)
+ *   --font-size-3xl · 2rem (32px)
+ *
+ * Spacing scale (4–72px increments):
+ *   --space-1 · 0.25rem (4px)
+ *   --space-2 · 0.5rem  (8px)
+ *   --space-3 · 0.75rem (12px)
+ *   --space-4 · 1rem    (16px)
+ *   --space-5 · 1.5rem  (24px)
+ *   --space-6 · 2rem    (32px)
+ *   --space-7 · 2.75rem (44px)
+ *   --space-8 · 3.5rem  (56px)
+ *   --space-9 · 4.5rem  (72px)
+ *
+ * Radii scale:
+ *   --radius-xs  · 0.35rem (6px)
+ *   --radius-sm  · 0.5rem  (8px)
+ *   --radius-md  · 0.75rem (12px)
+ *   --radius-lg  · 1rem    (16px)
+ *   --radius-xl  · 1.5rem  (24px)
+ *   --radius-2xl · 2rem    (32px)
+ *   --radius-full · 9999px (pill)
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* Typography */
+  --font-family-sans: "Inter", "Geist", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  --font-family-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  --font-size-2xs: 0.75rem;
+  --font-size-xs: 0.8125rem;
+  --font-size-sm: 0.875rem;
+  --font-size-md: 1rem;
+  --font-size-lg: 1.125rem;
+  --font-size-xl: 1.375rem;
+  --font-size-2xl: 1.75rem;
+  --font-size-3xl: 2rem;
+
+  --line-height-tight: 1.2;
+  --line-height-snug: 1.35;
+  --line-height-base: 1.6;
+
+  /* Space */
+  --space-0: 0;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 2.75rem;
+  --space-8: 3.5rem;
+  --space-9: 4.5rem;
+
+  /* Radii */
+  --radius-xs: 0.35rem;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.5rem;
+  --radius-2xl: 2rem;
+  --radius-full: 9999px;
+
+  /* Elevation */
+  --shadow-xs: 0 1px 3px rgba(15, 23, 42, 0.08);
+  --shadow-sm: 0 6px 18px rgba(15, 23, 42, 0.08);
+  --shadow-md: 0 14px 32px rgba(15, 23, 42, 0.12);
+  --shadow-lg: 0 24px 56px rgba(15, 23, 42, 0.16);
+
+  /* Motion */
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-fast: 140ms var(--ease-standard);
+  --transition-medium: 220ms var(--ease-standard);
+  --transition-slow: 360ms var(--ease-standard);
+
+  /* Layout */
+  --layout-max-width: 72rem;
+  --layout-gutter: clamp(1.5rem, 4vw, 3rem);
+  --content-max-width: 48rem;
+
+  /* Safe areas */
+  --safe-area-top: 0px;
+  --safe-area-right: 0px;
+  --safe-area-bottom: 0px;
+  --safe-area-left: 0px;
+
+  /* Color tokens */
+  --color-accent: #2563eb;
+  --color-accent-strong: #1d4ed8;
+  --color-accent-contrast: #f8fafc;
+  --color-accent-soft: rgba(37, 99, 235, 0.12);
+
+  --color-surface-page: #f5f7fb;
+  --color-surface-muted: #eef2f6;
+  --color-surface-card: #ffffff;
+  --color-surface-subtle: #f8fafc;
+  --color-surface-popover: #ffffff;
+  --color-surface-modal: #10172a;
+  --color-surface-overlay: rgba(15, 23, 42, 0.45);
+
+  --color-border-soft: #e2e8f0;
+  --color-border-strong: #cbd5e1;
+  --color-border-focus: rgba(37, 99, 235, 0.45);
+
+  --color-text-primary: #0f172a;
+  --color-text-secondary: #475569;
+  --color-text-tertiary: #64748b;
+  --color-text-inverse: #f8fafc;
+
+  --color-status-success: #16a34a;
+  --color-status-success-strong: #15803d;
+  --color-status-success-soft: rgba(34, 197, 94, 0.16);
+  --color-status-warning: #f59e0b;
+  --color-status-warning-strong: #b45309;
+  --color-status-warning-soft: rgba(245, 158, 11, 0.2);
+  --color-status-danger: #dc2626;
+  --color-status-danger-strong: #991b1b;
+  --color-status-danger-soft: rgba(220, 38, 38, 0.2);
+  --color-status-neutral: #64748b;
+  --color-status-neutral-soft: rgba(148, 163, 184, 0.24);
+  --color-status-info: var(--color-accent);
+  --color-status-info-soft: rgba(37, 99, 235, 0.18);
+}
+
+@supports (top: env(safe-area-inset-top)) {
+  :root {
+    --safe-area-top: env(safe-area-inset-top);
+    --safe-area-right: env(safe-area-inset-right);
+    --safe-area-bottom: env(safe-area-inset-bottom);
+    --safe-area-left: env(safe-area-inset-left);
+  }
+}
+
+@media (min-width: 90rem) {
+  :root {
+    --layout-max-width: 76rem;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-surface-page: #0c1424;
+    --color-surface-muted: rgba(30, 41, 59, 0.68);
+    --color-surface-card: rgba(17, 27, 47, 0.92);
+    --color-surface-subtle: rgba(23, 33, 54, 0.85);
+    --color-surface-popover: rgba(17, 27, 47, 0.96);
+    --color-surface-modal: rgba(15, 23, 42, 0.94);
+    --color-surface-overlay: rgba(2, 6, 23, 0.7);
+
+    --color-border-soft: rgba(148, 163, 184, 0.28);
+    --color-border-strong: rgba(148, 163, 184, 0.4);
+    --color-border-focus: rgba(125, 211, 252, 0.45);
+
+    --color-text-primary: #e2e8f0;
+    --color-text-secondary: rgba(226, 232, 240, 0.78);
+    --color-text-tertiary: rgba(226, 232, 240, 0.6);
+    --color-text-inverse: #0f172a;
+
+    --color-accent-soft: rgba(37, 99, 235, 0.22);
+    --color-status-success-soft: rgba(34, 197, 94, 0.24);
+    --color-status-warning-soft: rgba(245, 158, 11, 0.28);
+    --color-status-danger-soft: rgba(220, 38, 38, 0.28);
+    --color-status-neutral-soft: rgba(148, 163, 184, 0.32);
+    --color-status-info-soft: rgba(37, 99, 235, 0.3);
+
+    --shadow-xs: 0 1px 2px rgba(2, 6, 23, 0.3);
+    --shadow-sm: 0 10px 24px rgba(2, 6, 23, 0.5);
+    --shadow-md: 0 18px 40px rgba(2, 6, 23, 0.55);
+    --shadow-lg: 0 28px 60px rgba(2, 6, 23, 0.6);
+  }
+}

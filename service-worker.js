@@ -1,11 +1,12 @@
-const VERSION = 'pwa-v1.3.0';
+const VERSION = 'pwa-v1.4.0';
 const PRECACHE = `precache-${VERSION}`;
 const RUNTIME = `runtime-${VERSION}`;
 
 const PRECACHE_URLS = [
   '/',
   '/?source=pwa',
-  '/css/theme.css',
+  '/css/tokens.css',
+  '/css/base.css',
   '/css/components.css',
   '/js/app.js',
   '/js/vendor/jquery-3.6.0.min.js',

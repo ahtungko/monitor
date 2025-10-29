@@ -23,12 +23,12 @@ Use the following manual checks before releasing UI changes to ensure the respon
 - Test keyboard navigation (Tab/Shift+Tab) to ensure focus outlines are present on all actionable elements.
 
 ## PWA install & theme validation
-- In Chrome, open **Application → Manifest** and confirm no errors, the theme/background colors are `#0ea5e9` and `#f4f7fb`, and icons pass Lighthouse’s installability checks.
+- In Chrome, open **Application → Manifest** and confirm no errors, the theme/background colors are `#2563eb` and `#f5f7fb`, and icons pass Lighthouse’s installability checks.
 - Trigger the “安装应用” button (or browser prompt) to install to the desktop/home screen and verify the splash background and icon render with the refreshed palette.
-- After install, reopen the app and confirm the browser UI adopts the light (`#0ea5e9`) or dark (`#0b1220`) theme color depending on the OS setting.
+- After install, reopen the app and confirm the browser UI adopts the light (`#2563eb`) or dark (`#0c1424`) theme color depending on the OS setting.
 
 ## Offline & service worker checks
-- With DevTools **Network → Offline** enabled, hard refresh the app to ensure the shell loads using cached `/css/theme.css`, `/css/components.css`, and `/js/app.js`.
+- With DevTools **Network → Offline** enabled, hard refresh the app to ensure the shell loads using cached `/css/tokens.css`, `/css/base.css`, `/css/components.css`, and `/js/app.js`.
 - Confirm the monitor list grid displays cached content (or loading skeleton) and no 404s appear in the console.
 - Restore the connection and verify Network panel shows `from service worker` for precached assets during the first load, then falls back to live fetches.
 - Toggle offline/online while observing the in-app status banner to ensure the offline message appears and dismisses as expected.
