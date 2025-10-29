@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from bottle import route, run, template, debug, request, static_file, response
 from add import *
+from sql import fetch_pending_pwa_notifications, mark_pwa_notifications_delivered
 import logging
 import threading, time, sys, signal
 from pathlib import Path
@@ -98,6 +99,53 @@ def add():
 @route('/select')
 def select():
     return selectAllInfo_Info()
+
+
+@route('/notifications/pwa/pending', method='GET')
+def pending_pwa_notifications():
+    try:
+        notifications = fetch_pending_pwa_notifications(limit=25)
+    except Exception as exc:
+        logger.exception('Failed to load pending PWA notifications: %s', exc)
+        response.status = 500
+        return {'notifications': [], 'error': '无法加载通知队列。'}
+    return {'notifications': notifications}
+
+
+@route('/notifications/pwa/ack', method='POST')
+def acknowledge_pwa_notifications():
+    payload = request.json
+    if not isinstance(payload, dict):
+        response.status = 400
+        return {'success': False, 'error': '无效的请求负载。'}
+
+    ids_value = payload.get('ids')
+    id_list = []
+    if isinstance(ids_value, (list, tuple)):
+        for item in ids_value:
+            try:
+                id_list.append(int(item))
+            except (TypeError, ValueError):
+                continue
+    elif ids_value is not None:
+        try:
+            id_list.append(int(ids_value))
+        except (TypeError, ValueError):
+            pass
+
+    if not id_list:
+        return {'success': True, 'updated': 0}
+
+    try:
+        updated = mark_pwa_notifications_delivered(id_list)
+    except Exception as exc:
+        logger.exception('Failed to acknowledge PWA notifications: %s', exc)
+        response.status = 500
+        return {'success': False, 'error': '无法更新通知状态。'}
+
+    return {'success': True, 'updated': int(updated)}
+
+
 @route('/del', method='POST')
 def delete_monitor():
     payload = deleteVPS(request.forms.get('id'))

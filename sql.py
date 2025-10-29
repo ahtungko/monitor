@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import datetime
+import json
 import os
 import sqlite3
 
@@ -31,6 +32,7 @@ DATETIME_PATTERNS = (
 )
 
 _EXPIRY_BACKFILL_DONE = False
+
 
 def connSqlite():
     conn = sqlite3.connect(DB_PATH)
@@ -67,6 +69,24 @@ def _ensure_schema(conn):
                     flag INTEGER,
                     date TEXT DEFAULT (datetime('now', 'localtime')))
                 '''
+    )
+    cursor.execute(
+        '''CREATE TABLE IF NOT EXISTS pwa_notifications
+                    (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    monitor_id INTEGER NOT NULL,
+                    type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    options_json TEXT NOT NULL,
+                    scheduled_for TEXT,
+                    delivered_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    dedupe_key TEXT UNIQUE)
+                '''
+    )
+    cursor.execute(
+        '''CREATE INDEX IF NOT EXISTS idx_pwa_notifications_pending
+                    ON pwa_notifications(delivered_at, scheduled_for)'''
     )
     cursor.execute('PRAGMA table_info(vps)')
     columns = {row[1] for row in cursor.fetchall()}
@@ -141,6 +161,31 @@ def _parse_iso_datetime(value):
     return parsed.astimezone(UTC)
 
 
+def _normalize_utc_datetime(value):
+    if value is None:
+        return None
+    if isinstance(value, datetime.datetime):
+        candidate = value
+    elif isinstance(value, (int, float)):
+        candidate = datetime.datetime.fromtimestamp(value, datetime.timezone.utc)
+    else:
+        candidate = _parse_iso_datetime(value)
+        if candidate is None and isinstance(value, str):
+            try:
+                parsed = datetime.datetime.fromisoformat(value)
+            except ValueError:
+                parsed = None
+            if parsed is not None:
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+                candidate = parsed
+    if candidate is None:
+        return None
+    if candidate.tzinfo is None:
+        candidate = candidate.replace(tzinfo=datetime.timezone.utc)
+    return candidate.astimezone(UTC).replace(microsecond=0)
+
+
 def calculate_expiry_utc(creation_value, valid_value):
     expiry_local = _parse_localized_datetime(valid_value, JAKARTA_TZ)
     if expiry_local is None:
@@ -207,6 +252,7 @@ def update_expiry_utc(id, expiry_iso):
     cursor.execute('update vps set expiry_utc=? where id=?', (expiry_iso, id))
     conn.commit()
     conn.close()
+
 
 def addSql(name, ops, cookie):
     conn = connSqlite()
@@ -303,3 +349,117 @@ def selectSend(m_id, flag):
     res = exec.fetchall()
     conn.close()
     return res
+
+
+def queue_pwa_notification(monitor_id, notification_type, title, options, scheduled_for=None, dedupe_key=None):
+    if monitor_id is None or not notification_type or not title:
+        return None
+    if not isinstance(options, dict):
+        options = {}
+    scheduled_dt = _normalize_utc_datetime(scheduled_for)
+    scheduled_iso = scheduled_dt.isoformat() if scheduled_dt is not None else None
+    now_iso = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
+    try:
+        options_json = json.dumps(options, ensure_ascii=False)
+    except (TypeError, ValueError):
+        options_json = json.dumps({}, ensure_ascii=False)
+
+    conn = connSqlite()
+    try:
+        cursor = conn.cursor()
+        existing = None
+        if dedupe_key:
+            cursor.execute('SELECT id, delivered_at FROM pwa_notifications WHERE dedupe_key=?', (dedupe_key,))
+            existing = cursor.fetchone()
+        if existing:
+            if existing['delivered_at'] is None:
+                cursor.execute(
+                    'UPDATE pwa_notifications SET monitor_id=?, type=?, title=?, options_json=?, scheduled_for=?, updated_at=? WHERE id=?',
+                    (monitor_id, notification_type, title, options_json, scheduled_iso, now_iso, existing['id']),
+                )
+                conn.commit()
+            return existing['id']
+        cursor.execute(
+            'INSERT INTO pwa_notifications (monitor_id, type, title, options_json, scheduled_for, delivered_at, created_at, updated_at, dedupe_key) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+            (monitor_id, notification_type, title, options_json, scheduled_iso, now_iso, now_iso, dedupe_key),
+        )
+        conn.commit()
+        return cursor.lastrowid
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        if dedupe_key:
+            try:
+                cursor.execute('SELECT id FROM pwa_notifications WHERE dedupe_key=?', (dedupe_key,))
+                row = cursor.fetchone()
+                if row:
+                    if isinstance(row, sqlite3.Row):
+                        return row['id']
+                    return row[0]
+            except sqlite3.Error:
+                return None
+        return None
+    finally:
+        conn.close()
+
+
+def fetch_pending_pwa_notifications(limit=20):
+    if limit is None or limit <= 0:
+        limit = 20
+    now_iso = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
+    conn = connSqlite()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            '''SELECT id, monitor_id, type, title, options_json
+               FROM pwa_notifications
+               WHERE delivered_at IS NULL AND (scheduled_for IS NULL OR scheduled_for <= ?)
+               ORDER BY CASE WHEN scheduled_for IS NULL THEN 1 ELSE 0 END, scheduled_for ASC, id ASC
+               LIMIT ?''',
+            (now_iso, limit),
+        )
+        rows = cursor.fetchall() or []
+    finally:
+        conn.close()
+
+    notifications = []
+    for row in rows:
+        try:
+            options = json.loads(row['options_json']) if row['options_json'] else {}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            options = {}
+        notifications.append(
+            {
+                'id': row['id'],
+                'monitorId': row['monitor_id'],
+                'type': row['type'],
+                'title': row['title'],
+                'options': options,
+            }
+        )
+    return notifications
+
+
+def mark_pwa_notifications_delivered(ids):
+    if not ids:
+        return 0
+    clean_ids = []
+    for value in ids:
+        try:
+            clean_ids.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    if not clean_ids:
+        return 0
+    placeholders = ','.join('?' for _ in clean_ids)
+    now_iso = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
+    conn = connSqlite()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f'UPDATE pwa_notifications SET delivered_at=?, updated_at=? WHERE id IN ({placeholders})',
+            [now_iso, now_iso, *clean_ids],
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()

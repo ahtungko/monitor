@@ -1,4 +1,4 @@
-const VERSION = 'pwa-v1.4.0';
+const VERSION = 'pwa-v1.5.0';
 const PRECACHE = `precache-${VERSION}`;
 const RUNTIME = `runtime-${VERSION}`;
 
@@ -23,6 +23,10 @@ const PRECACHE_URLS = [
   '/icons/app-icon-maskable-512.png'
 ];
 
+const NOTIFICATION_SYNC_TAG = 'vps-expiry-sync';
+const PWA_NOTIFICATION_ENDPOINT = '/notifications/pwa/pending';
+const PWA_NOTIFICATION_ACK_ENDPOINT = '/notifications/pwa/ack';
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(PRECACHE)
@@ -33,13 +37,15 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
-        keys
-          .filter((key) => key !== PRECACHE && key !== RUNTIME)
-          .map((key) => caches.delete(key))
+    caches.keys()
+      .then((keys) =>
+        Promise.all(
+          keys
+            .filter((key) => key !== PRECACHE && key !== RUNTIME)
+            .map((key) => caches.delete(key))
+        )
       )
-    ).then(() => self.clients.claim())
+      .then(() => Promise.all([self.clients.claim(), processPendingNotifications()]))
   );
 });
 
@@ -83,6 +89,75 @@ async function staleWhileRevalidate(request) {
     })
     .catch(() => cached);
   return cached || networkFetch;
+}
+
+async function fetchPendingNotificationsFromServer() {
+  const response = await fetch(PWA_NOTIFICATION_ENDPOINT, {
+    credentials: 'same-origin',
+    cache: 'no-store',
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) {
+    throw new Error(`Unexpected status ${response.status}`);
+  }
+  const payload = await response.json();
+  const list = Array.isArray(payload?.notifications) ? payload.notifications : [];
+  return list.filter((item) => item && typeof item === 'object');
+}
+
+async function acknowledgeNotifications(ids) {
+  if (!Array.isArray(ids) || !ids.length) {
+    return;
+  }
+  try {
+    await fetch(PWA_NOTIFICATION_ACK_ENDPOINT, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ ids }),
+    });
+  } catch (error) {
+    console.error('[service-worker] Failed to acknowledge notifications:', error);
+  }
+}
+
+async function processPendingNotifications() {
+  try {
+    const pending = await fetchPendingNotificationsFromServer();
+    if (!pending.length) {
+      return;
+    }
+    const deliveredIds = [];
+    for (const item of pending) {
+      if (!item || typeof item !== 'object' || !item.title) {
+        continue;
+      }
+      const options = item.options && typeof item.options === 'object' ? { ...item.options } : {};
+      const data = options.data && typeof options.data === 'object' ? { ...options.data } : {};
+      if (item.monitorId != null && data.vpsId == null) {
+        data.vpsId = item.monitorId;
+      }
+      if (!data.type && item.type) {
+        data.type = item.type;
+      }
+      options.data = data;
+      try {
+        await self.registration.showNotification(item.title, options);
+        if (item.id != null) {
+          deliveredIds.push(item.id);
+        }
+      } catch (error) {
+        console.error('[service-worker] Failed to show notification:', error);
+      }
+    }
+    if (deliveredIds.length) {
+      await acknowledgeNotifications(deliveredIds);
+    }
+  } catch (error) {
+    console.error('[service-worker] Failed to process pending notifications:', error);
+  }
 }
 
 self.addEventListener('fetch', (event) => {
@@ -155,13 +230,30 @@ self.addEventListener('notificationclose', (event) => {
   console.log('[service-worker] Notification closed:', event.notification.tag);
 });
 
+self.addEventListener('periodicsync', (event) => {
+  if (event.tag === NOTIFICATION_SYNC_TAG) {
+    event.waitUntil(processPendingNotifications());
+  }
+});
+
+self.addEventListener('sync', (event) => {
+  if (event.tag === NOTIFICATION_SYNC_TAG) {
+    event.waitUntil(processPendingNotifications());
+  }
+});
+
 self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SHOW_NOTIFICATION') {
+  if (!event.data || !event.data.type) {
+    return;
+  }
+  if (event.data.type === 'SHOW_NOTIFICATION') {
     const { title, options } = event.data;
     if (title && self.registration && self.registration.showNotification) {
       event.waitUntil(
         self.registration.showNotification(title, options)
       );
     }
+  } else if (event.data.type === 'CHECK_PENDING_NOTIFICATIONS') {
+    event.waitUntil(processPendingNotifications());
   }
 });

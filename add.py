@@ -401,12 +401,61 @@ def checkDateTime():
             if expiry_dt is None:
                 continue
             now_utc = datetime.datetime.now(datetime.timezone.utc)
+            if expiry_dt <= now_utc:
+                continue
             delta_time = expiry_dt - now_utc
+
+            ops_label = vps['ops'] or ''
+            name_label = vps['name'] or ''
+            pretty_time = expiry_display or format_malaysia_display(expiry_dt)
+
+            try:
+                schedule_point = expiry_dt - datetime.timedelta(days=2)
+                dedupe_key = f"expiry:{vps['id']}:{expiry_dt.isoformat()}"
+                total_seconds = max(delta_time.total_seconds(), 0)
+                remaining_days = int((total_seconds + 86399) // 86400)
+                if remaining_days <= 0 and total_seconds > 0:
+                    remaining_days = 1
+                remaining_text = f'{remaining_days} 天' if remaining_days > 0 else '不足 1 天'
+                provider_display = str(ops_label).upper() if ops_label else '未知'
+                display_name = name_label or provider_display or '未命名'
+                body_lines = [
+                    f'服务商：{provider_display}',
+                    f'名称：{name_label or "未命名"}',
+                    f'到期时间：{pretty_time}',
+                    f'剩余时间：约 {remaining_text}',
+                ]
+                notification_options = {
+                    'body': '\n'.join(body_lines),
+                    'icon': '/icons/app-icon-192.png',
+                    'badge': '/icons/app-icon-96.png',
+                    'tag': f'expiry-{vps["id"]}',
+                    'requireInteraction': True,
+                    'data': {
+                        'type': 'expiry',
+                        'vpsId': vps['id'],
+                        'provider': ops_label,
+                        'name': name_label,
+                        'expiryIso': expiry_iso,
+                        'expiryDisplay': pretty_time,
+                    },
+                    'actions': [
+                        {'action': 'open', 'title': '查看监控'}
+                    ],
+                }
+                queue_pwa_notification(
+                    vps['id'],
+                    'expiry-warning',
+                    f'VPS 到期提醒：{display_name}',
+                    notification_options,
+                    scheduled_for=schedule_point,
+                    dedupe_key=dedupe_key,
+                )
+            except Exception as exc:
+                logger.exception('Failed to queue PWA notification for VPS %s: %s', vps['id'], exc)
+
             if datetime.timedelta(days=0) < delta_time <= datetime.timedelta(days=3):
-                ops_label = vps['ops'] or ''
-                name_label = vps['name'] or ''
                 vps_type = str(ops_label).lower()
-                pretty_time = expiry_display or format_malaysia_display(expiry_dt)
                 message = (
                     f"你的{ops_label}小鸡\n"
                     f"名称:{name_label}即将到期\n"
