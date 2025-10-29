@@ -69,6 +69,7 @@
   - 对 `/select` 等数据接口采用 network-first 策略，无法联网时自动回退到缓存数据并在页面顶部显示离线提示。
 - 开发调试时，如修改了前端资源或 service worker，请在浏览器 DevTools 中执行 **Hard Reload + Clear Storage** 或注销旧的 service worker 以便加载最新缓存。
 - 启动方式与此前一致，运行 `python3 main.py` 即会同时提供 PWA 资源。部署后建议使用 Chrome DevTools → Lighthouse → **Progressive Web App** 检查项，自检是否满足 *Installable* 与 *Offline capable* 要求。
+- 详见 [`docs/ui-redesign.md`](docs/ui-redesign.md) 获取桌面/平板/移动端响应式验证、PWA 安装与离线冒烟测试的手动检查清单。
 
 ## 前端样式说明
 
