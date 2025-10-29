@@ -98,12 +98,20 @@ def add():
 @route('/select')
 def select():
     return selectAllInfo_Info()
-@route('/del', method = 'POST')
-def delete():
-    id = request.forms.get('id')
-    return deleteVPS(id)
-@route('/modify', method = 'POST')
-def delete():
+@route('/del', method='POST')
+def delete_monitor():
+    payload = deleteVPS(request.forms.get('id'))
+    if isinstance(payload, dict):
+        status_code = payload.get('status')
+        if status_code is not None:
+            response.status = status_code
+        elif payload.get('success') is False:
+            response.status = 400
+    return payload
+
+
+@route('/modify', method='POST')
+def update_monitor():
     id = request.forms.get('id')
     name = request.forms.get('name')
     ops = request.forms.get('ops')
