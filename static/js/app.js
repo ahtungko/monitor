@@ -1275,6 +1275,17 @@ function createNotificationManager({
         }
     }
 
+    function syncPanelVisibility() {
+        if (!panelEl) {
+            return;
+        }
+        const hidden = panelEl.classList.contains('hidden');
+        panelEl.setAttribute('aria-hidden', hidden ? 'true' : 'false');
+        if (togglePanelBtn) {
+            togglePanelBtn.setAttribute('aria-expanded', hidden ? 'false' : 'true');
+        }
+    }
+
     async function requestPermission() {
         if (!isNotificationSupported()) {
             if (showToast) {
@@ -1454,6 +1465,7 @@ function createNotificationManager({
         } else {
             panelEl.classList.add('hidden');
         }
+        syncPanelVisibility();
     }
 
     if (togglePanelBtn) {
@@ -1487,6 +1499,7 @@ function createNotificationManager({
         });
     }
 
+    syncPanelVisibility();
     updateUI();
 
     return {
