@@ -45,6 +45,7 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
     }
 
     let bannerTimeoutId = null;
+    let autoCardId = 0;
 
     const MALAYSIA_TIME_ZONE = 'Asia/Kuala_Lumpur';
     const MALAYSIA_TIME_SUFFIX = 'MYT';
@@ -99,7 +100,10 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
         }
         const toast = document.createElement('div');
         toast.className = `toast toast--${variant}`;
+        toast.dataset.variant = variant;
         toast.setAttribute('role', 'alert');
+        toast.setAttribute('aria-live', variant === 'error' ? 'assertive' : 'polite');
+        toast.setAttribute('aria-atomic', 'true');
         toast.textContent = message;
         ui.toastContainer.appendChild(toast);
         requestAnimationFrame(() => {
@@ -129,24 +133,47 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
             return;
         }
         ui.monitorList.innerHTML = '';
-        for (let index = 0; index < 3; index += 1) {
+        const skeletonCount = 3;
+        for (let index = 0; index < skeletonCount; index += 1) {
             const card = document.createElement('article');
             card.className = 'monitor-card monitor-card--skeleton';
+            card.setAttribute('aria-hidden', 'true');
 
-            const header = document.createElement('div');
+            const header = document.createElement('header');
             header.className = 'monitor-card__header';
+
             const titleSkeleton = document.createElement('div');
-            titleSkeleton.className = 'skeleton-line skeleton-line--lg';
-            header.appendChild(titleSkeleton);
+            titleSkeleton.className = 'monitor-card__title';
+            const titleLine = document.createElement('div');
+            titleLine.className = 'skeleton-line skeleton-line--lg';
+            const badgeLine = document.createElement('div');
+            badgeLine.className = 'skeleton-line skeleton-line--sm';
+            titleSkeleton.append(titleLine, badgeLine);
+
+            const actionsSkeleton = document.createElement('div');
+            actionsSkeleton.className = 'monitor-card__actions';
+            for (let i = 0; i < 2; i += 1) {
+                const actionLine = document.createElement('div');
+                actionLine.className = 'skeleton-line skeleton-line--sm';
+                actionsSkeleton.appendChild(actionLine);
+            }
+
+            header.append(titleSkeleton, actionsSkeleton);
             card.appendChild(header);
 
-            const meta = document.createElement('div');
+            const meta = document.createElement('dl');
             meta.className = 'monitor-card__meta';
-            for (let i = 0; i < 3; i += 1) {
-                const line = document.createElement('div');
-                line.className = 'skeleton-line';
-                meta.appendChild(line);
+            for (let i = 0; i < 4; i += 1) {
+                const row = document.createElement('div');
+                row.className = 'monitor-card__row';
+                const label = document.createElement('div');
+                label.className = 'skeleton-line skeleton-line--sm';
+                const value = document.createElement('div');
+                value.className = 'skeleton-line skeleton-line--sm';
+                row.append(label, value);
+                meta.appendChild(row);
             }
+
             card.appendChild(meta);
             ui.monitorList.appendChild(card);
         }
@@ -159,6 +186,8 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
         ui.monitorList.innerHTML = '';
         const container = document.createElement('div');
         container.className = 'empty-state';
+        container.setAttribute('role', 'status');
+        container.setAttribute('aria-live', 'polite');
 
         const title = document.createElement('p');
         title.className = 'empty-state__title';
@@ -169,6 +198,19 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
         subtitle.textContent = '点击“添加监控”以创建新的监控任务。';
 
         container.append(title, subtitle);
+
+        if (typeof openAddModal === 'function') {
+            const actionButton = document.createElement('button');
+            actionButton.type = 'button';
+            actionButton.className = 'primary-btn';
+            actionButton.textContent = '立即添加监控';
+            actionButton.setAttribute('aria-label', '立即添加一个新的监控实例');
+            actionButton.addEventListener('click', () => {
+                openAddModal();
+            });
+            container.appendChild(actionButton);
+        }
+
         ui.monitorList.append(container);
     }
 
@@ -287,6 +329,7 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
             return;
         }
         ui.monitorList.innerHTML = '';
+        autoCardId = 0;
         if (!state.monitors.length) {
             renderEmpty();
             return;
@@ -317,32 +360,45 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
             expiryDisplay,
             location,
             updateTimeDisplay,
+            updateTimeIso,
             rawState,
             expiryIso,
         } = item;
         const expiry = resolveExpiryStatus(expiryIso, expiryDisplay);
         const cookieStatus = resolveCookieStatus(rawState);
         const displayName = name || '未命名实例';
-        const displayOps = ops ? ops.toUpperCase() : '未知';
+        const displayOps = typeof ops === 'string' ? ops.toUpperCase() : '未知';
 
         const card = document.createElement('article');
         card.className = 'monitor-card';
         card.dataset.monitorId = id != null ? String(id) : '';
+        card.dataset.cookieState = cookieStatus.variant;
+        card.dataset.expiryState = expiry.variant;
 
-        const header = document.createElement('div');
+        const headingId =
+            id != null ? `monitor-card-title-${id}` : `monitor-card-title-auto-${(autoCardId += 1)}`;
+        card.setAttribute('aria-labelledby', headingId);
+
+        const header = document.createElement('header');
         header.className = 'monitor-card__header';
 
-        const titleWrap = document.createElement('div');
-        titleWrap.className = 'monitor-card__title';
+        const title = document.createElement('h3');
+        title.className = 'monitor-card__title';
+        title.id = headingId;
 
-        const title = document.createElement('span');
-        title.textContent = displayName;
-        titleWrap.appendChild(title);
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = displayName;
+        nameSpan.title = displayName;
+        title.appendChild(nameSpan);
 
         const opsBadge = document.createElement('span');
         opsBadge.className = 'ops-badge';
         opsBadge.textContent = displayOps;
-        titleWrap.appendChild(opsBadge);
+        opsBadge.setAttribute('aria-label', `服务商 ${displayOps}`);
+        opsBadge.title = `服务商 ${displayOps}`;
+        title.appendChild(opsBadge);
+
+        header.appendChild(title);
 
         const actions = document.createElement('div');
         actions.className = 'monitor-card__actions';
@@ -354,6 +410,7 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
         editButton.dataset.id = id != null ? String(id) : '';
         editButton.dataset.name = displayName;
         editButton.textContent = '修改';
+        editButton.setAttribute('aria-label', `修改监控「${displayName}」`);
 
         const deleteButton = document.createElement('button');
         deleteButton.type = 'button';
@@ -362,35 +419,123 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
         deleteButton.dataset.id = id != null ? String(id) : '';
         deleteButton.dataset.name = displayName;
         deleteButton.textContent = '删除';
+        deleteButton.setAttribute('aria-label', `删除监控「${displayName}」`);
 
         actions.append(editButton, deleteButton);
-        header.append(titleWrap, actions);
+        header.appendChild(actions);
         card.appendChild(header);
 
         const meta = document.createElement('dl');
         meta.className = 'monitor-card__meta';
+        meta.setAttribute('aria-label', '监控详情');
+
+        const cookieBadge = createStatusBadge(cookieStatus.label, cookieStatus.variant, {
+            ariaLabel: `Cookie 状态：${cookieStatus.label}`,
+            tooltip: cookieStatus.label,
+        });
+
+        const expiryValue = document.createDocumentFragment();
+        const expiryBadge = createStatusBadge(expiry.label, expiry.variant, {
+            ariaLabel: `过期状态：${expiry.label}`,
+            tooltip: expiry.display || expiry.label,
+        });
+        expiryValue.appendChild(expiryBadge);
+        const expiryTimeNode = createTimeDisplayNode(expiry.display, expiryIso);
+        if (expiryTimeNode) {
+            expiryValue.appendChild(document.createTextNode(' '));
+            expiryValue.appendChild(expiryTimeNode);
+        } else {
+            const placeholder = document.createElement('span');
+            placeholder.textContent = '—';
+            expiryValue.appendChild(document.createTextNode(' '));
+            expiryValue.appendChild(placeholder);
+        }
+
+        const updateTimeNode = createTimeDisplayNode(updateTimeDisplay, updateTimeIso);
+        const locationValue = location || '—';
+        const creationValue = creationDate || '—';
+
         meta.append(
-            createMetaRow('Cookie 状态', createStatusBadge(cookieStatus.label, cookieStatus.variant)),
-            createMetaRow('过期时间', expiry.display || '—'),
-            createMetaRow('最近查询时间', updateTimeDisplay || '—'),
-            createMetaRow('位置', location || '—'),
-            createMetaRow('创建时间', creationDate || '—'),
+            createMetaRow('Cookie 状态', cookieBadge, {
+                field: 'cookie-status',
+                valueTitle: cookieStatus.label,
+                valueState: cookieStatus.variant,
+            }),
+            createMetaRow('过期时间', expiryValue, {
+                field: 'expiry',
+                valueTitle: expiry.display || expiry.label,
+                valueState: expiry.variant,
+            }),
+            createMetaRow('最近查询时间', updateTimeNode || '—', {
+                field: 'last-checked',
+                valueTitle: updateTimeDisplay || undefined,
+            }),
+            createMetaRow('位置', locationValue, {
+                field: 'location',
+                valueTitle: location || undefined,
+            }),
+            createMetaRow('创建时间', creationValue, {
+                field: 'created-at',
+                valueTitle: creationDate || undefined,
+            }),
         );
         card.appendChild(meta);
 
         return card;
     }
 
-    function createStatusBadge(label, variant) {
+    function createStatusBadge(label, variant, { ariaLabel, tooltip } = {}) {
+        const safeVariant = typeof variant === 'string' && variant ? variant : 'neutral';
+        const textContent = label || '未知';
         const badge = document.createElement('span');
-        badge.className = `status-badge status-badge--${variant}`;
-        badge.textContent = label;
+        badge.className = `status-badge status-badge--${safeVariant}`;
+        badge.dataset.variant = safeVariant;
+        badge.textContent = textContent;
+        if (ariaLabel) {
+            badge.setAttribute('aria-label', ariaLabel);
+        } else {
+            badge.setAttribute('aria-label', textContent);
+        }
+        if (tooltip) {
+            badge.title = tooltip;
+        } else {
+            badge.title = textContent;
+        }
         return badge;
     }
 
-    function createMetaRow(label, value) {
+    function createTimeDisplayNode(displayValue, isoValue) {
+        if (!displayValue) {
+            return null;
+        }
+        const cleanDisplay = String(displayValue).trim();
+        if (!cleanDisplay) {
+            return null;
+        }
+        const normalized = cleanDisplay.replace(/\s+/g, '');
+        if (normalized === '—' || normalized === '--') {
+            return null;
+        }
+        const timeEl = document.createElement('time');
+        timeEl.textContent = cleanDisplay;
+        timeEl.title = cleanDisplay;
+        if (isoValue) {
+            const parsed = parseExpiryIso(isoValue);
+            if (parsed) {
+                timeEl.dateTime = parsed.toISOString();
+            } else if (typeof isoValue === 'string') {
+                timeEl.dateTime = isoValue;
+            }
+        }
+        return timeEl;
+    }
+
+    function createMetaRow(label, value, { field, valueTitle, valueState } = {}) {
         const row = document.createElement('div');
         row.className = 'monitor-card__row';
+        if (field) {
+            row.dataset.field = field;
+        }
         const dt = document.createElement('dt');
         dt.textContent = label;
         const dd = document.createElement('dd');
@@ -398,6 +543,12 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
             dd.appendChild(value);
         } else {
             dd.textContent = value;
+        }
+        if (valueTitle) {
+            dd.title = valueTitle;
+        }
+        if (valueState) {
+            dd.dataset.state = valueState;
         }
         row.append(dt, dd);
         return row;
