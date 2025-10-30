@@ -1,4 +1,4 @@
-const VERSION = 'pwa-v1.5.0';
+const VERSION = 'pwa-v1.4.0';
 const PRECACHE = `precache-${VERSION}`;
 const RUNTIME = `runtime-${VERSION}`;
 
