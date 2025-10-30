@@ -1,6 +1,10 @@
 const STORAGE_KEY = 'renewal-monitor-cache';
 const REFRESH_INTERVAL = 20000;
 const FETCH_TIMEOUT = 15000;
+const NOTIFICATION_POLL_INTERVAL = 60 * 1000;
+const PWA_NOTIFICATION_ENDPOINT = '/notifications/pwa/pending';
+const PWA_NOTIFICATION_ACK_ENDPOINT = '/notifications/pwa/ack';
+const NOTIFICATION_SYNC_TAG = 'vps-expiry-sync';
 const FOCUSABLE_SELECTORS = 'a[href], area[href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 const ui = {
@@ -34,6 +38,7 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
         loading: false,
         offline: !navigator.onLine,
         refreshTimer: null,
+        notificationTimer: null,
         deferredPrompt: null,
         focusTargetId: urlParams.get('vps'),
     };
@@ -1053,13 +1058,23 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
     }
 
     function registerServiceWorker() {
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/service-worker.js').catch((error) => {
+        if (!('serviceWorker' in navigator)) {
+            return;
+        }
+        window.addEventListener('load', () => {
+            navigator.serviceWorker
+                .register('/service-worker.js')
+                .then(() => navigator.serviceWorker.ready)
+                .then((registration) => {
+                    setupNotificationBackgroundSync(registration);
+                    requestServiceWorkerNotificationSync(registration);
+                    fetchPendingNotifications({ force: true });
+                    return registration;
+                })
+                .catch((error) => {
                     console.error('[frontend] Service worker registration failed:', error);
                 });
-            });
-        }
+        });
     }
 
     const notificationManager = createNotificationManager({
@@ -1072,12 +1087,151 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
         openBrowserSettingsBtn: document.getElementById('openBrowserNotificationSettingsBtn'),
         supportHintEl: document.getElementById('notificationSupportHint'),
         showToast,
+        onEnabledChange: handleNotificationEnabledChange,
     });
+
+    let lastNotificationSyncAt = 0;
+
+    async function setupNotificationBackgroundSync(registration) {
+        if (!('serviceWorker' in navigator)) {
+            return;
+        }
+        let target = registration;
+        try {
+            if (!target) {
+                target = await navigator.serviceWorker.ready;
+            }
+            if (!target) {
+                return;
+            }
+            if ('periodicSync' in target) {
+                try {
+                    const tags = await target.periodicSync.getTags();
+                    if (!tags.includes(NOTIFICATION_SYNC_TAG)) {
+                        await target.periodicSync.register(NOTIFICATION_SYNC_TAG, {
+                            minInterval: 6 * 60 * 60 * 1000,
+                        });
+                    }
+                } catch (error) {
+                    console.warn('[notifications] Failed to register periodic sync:', error);
+                }
+            } else if ('sync' in target) {
+                try {
+                    await target.sync.register(NOTIFICATION_SYNC_TAG);
+                } catch (error) {
+                    console.warn('[notifications] Sync registration failed:', error);
+                }
+            }
+        } catch (error) {
+            console.warn('[notifications] Unable to configure background sync:', error);
+        }
+    }
+
+    function requestServiceWorkerNotificationSync(registration) {
+        if (!('serviceWorker' in navigator)) {
+            return;
+        }
+        const readyPromise = registration ? Promise.resolve(registration) : navigator.serviceWorker.ready;
+        readyPromise
+            .then((reg) => {
+                if (reg && reg.active) {
+                    reg.active.postMessage({ type: 'CHECK_PENDING_NOTIFICATIONS' });
+                }
+            })
+            .catch(() => {});
+    }
+
+    async function fetchPendingNotifications({ force = false } = {}) {
+        if (!notificationManager || typeof notificationManager.isEnabled !== 'function') {
+            return;
+        }
+        if (!notificationManager.isEnabled() || notificationManager.getPermission() !== 'granted') {
+            return;
+        }
+        const now = Date.now();
+        if (!force && now - lastNotificationSyncAt < NOTIFICATION_POLL_INTERVAL) {
+            return;
+        }
+        try {
+            const response = await fetch(PWA_NOTIFICATION_ENDPOINT, {
+                headers: { Accept: 'application/json' },
+                cache: 'no-store',
+                credentials: 'same-origin',
+            });
+            if (!response.ok) {
+                throw new Error(`状态码 ${response.status}`);
+            }
+            const payload = await response.json();
+            const notifications = Array.isArray(payload?.notifications) ? payload.notifications : [];
+            lastNotificationSyncAt = now;
+            if (!notifications.length) {
+                return;
+            }
+            const deliveredIds = [];
+            for (const item of notifications) {
+                if (!item || typeof item !== 'object' || !item.title) {
+                    continue;
+                }
+                const options = item.options && typeof item.options === 'object' ? { ...item.options } : {};
+                const data = options.data && typeof options.data === 'object' ? { ...options.data } : {};
+                if (item.monitorId != null && data.vpsId == null) {
+                    data.vpsId = item.monitorId;
+                }
+                if (!data.type && item.type) {
+                    data.type = item.type;
+                }
+                options.data = data;
+                if (typeof options.tag !== 'string' && item.id != null) {
+                    options.tag = `expiry-${item.id}`;
+                }
+                const result = await notificationManager.showNotification(item.title, options);
+                if (result && item.id != null) {
+                    deliveredIds.push(item.id);
+                }
+            }
+            if (deliveredIds.length) {
+                await fetch(PWA_NOTIFICATION_ACK_ENDPOINT, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ ids: deliveredIds }),
+                });
+            }
+        } catch (error) {
+            console.error('[notifications] Failed to fetch pending notifications:', error);
+        }
+    }
+
+    function startNotificationPolling() {
+        if (state.notificationTimer) {
+            window.clearInterval(state.notificationTimer);
+            state.notificationTimer = null;
+        }
+        fetchPendingNotifications({ force: true });
+        state.notificationTimer = window.setInterval(() => {
+            fetchPendingNotifications();
+        }, NOTIFICATION_POLL_INTERVAL);
+    }
+
+    function handleNotificationEnabledChange(isEnabled) {
+        if (isEnabled) {
+            lastNotificationSyncAt = 0;
+            fetchPendingNotifications({ force: true });
+            setupNotificationBackgroundSync();
+            requestServiceWorkerNotificationSync();
+        }
+    }
 
     function cleanup() {
         if (state.refreshTimer) {
             window.clearInterval(state.refreshTimer);
             state.refreshTimer = null;
+        }
+        if (state.notificationTimer) {
+            window.clearInterval(state.notificationTimer);
+            state.notificationTimer = null;
         }
         if (bannerTimeoutId) {
             window.clearTimeout(bannerTimeoutId);
@@ -1104,6 +1258,7 @@ if (!ui.monitorList || !ui.formTemplate || !ui.modal || !ui.modalOverlay || !ui.
 
         setupInstallPrompt();
         registerServiceWorker();
+        startNotificationPolling();
     }
 
     init();
@@ -1213,6 +1368,7 @@ function createNotificationManager({
     openBrowserSettingsBtn,
     supportHintEl,
     showToast,
+    onEnabledChange,
 }) {
     const STORAGE_KEY_ENABLED = 'pwa-notifications-enabled';
     const STORAGE_KEY_CHECKED_EXPIRY = 'pwa-notifications-checked-expiry';
@@ -1354,6 +1510,13 @@ function createNotificationManager({
         enabled = Boolean(value);
         localStorage.setItem(STORAGE_KEY_ENABLED, String(enabled));
         updateUI();
+        if (typeof onEnabledChange === 'function') {
+            try {
+                onEnabledChange(enabled);
+            } catch (error) {
+                console.error('[notifications] onEnabledChange callback failed:', error);
+            }
+        }
     }
 
     async function showNotification(title, options = {}) {
@@ -1418,8 +1581,6 @@ function createNotificationManager({
             return;
         }
 
-        const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-        const now = Date.now();
         const newChecked = new Set();
 
         for (const monitor of monitors) {
@@ -1427,34 +1588,16 @@ function createNotificationManager({
                 continue;
             }
 
-            const monitorKey = `${monitor.id}`;
+            const monitorKey = `cookie:${monitor.id}`;
             newChecked.add(monitorKey);
 
             if (lastCheckedExpiry.has(monitorKey)) {
                 continue;
             }
 
-            const expiryDate = monitor.expiryIso ? new Date(monitor.expiryIso) : null;
-            if (!expiryDate || isNaN(expiryDate.getTime())) {
-                continue;
-            }
-
-            const diffMs = expiryDate.getTime() - now;
-            const diffDays = diffMs / ONE_DAY_MS;
-
             const cookieAbnormal = monitor.rawState === 0 || monitor.rawState === '0';
 
-            if (diffDays > 0 && diffDays <= 3) {
-                const daysText = Math.ceil(diffDays) === 1 ? '1 天' : `${Math.ceil(diffDays)} 天`;
-                showNotification(`VPS 即将到期 - ${monitor.name || '未命名'}`, {
-                    body: `您的 ${monitor.ops?.toUpperCase() || '未知'} VPS 将在 ${daysText} 后到期（${monitor.expiryDisplay || ''}）。请及时续期。`,
-                    icon: '/icons/app-icon-192.png',
-                    badge: '/icons/app-icon-96.png',
-                    tag: `expiry-${monitor.id}`,
-                    requireInteraction: true,
-                    data: { type: 'expiry', vpsId: monitor.id },
-                });
-            } else if (cookieAbnormal) {
+            if (cookieAbnormal) {
                 showNotification(`Cookie 异常 - ${monitor.name || '未命名'}`, {
                     body: `您的 ${monitor.ops?.toUpperCase() || '未知'} VPS 的 Cookie 状态异常，可能需要更新。`,
                     icon: '/icons/app-icon-192.png',
@@ -1500,12 +1643,33 @@ function createNotificationManager({
     }
 
     if (toggleEl) {
-        toggleEl.addEventListener('change', (event) => {
-            setEnabled(event.target.checked);
-            if (enabled && showToast) {
-                showToast('通知功能已启用。', 'success');
-            } else if (showToast) {
-                showToast('通知功能已禁用。', 'info');
+        toggleEl.addEventListener('change', async (event) => {
+            const wantsEnabled = event.target.checked;
+            if (wantsEnabled) {
+                const status = getPermissionStatus();
+                if (status === 'granted') {
+                    setEnabled(true);
+                    if (showToast) {
+                        showToast('通知功能已启用。', 'success');
+                    }
+                } else if (status === 'denied') {
+                    event.target.checked = false;
+                    setEnabled(false);
+                    if (showToast) {
+                        showToast('通知权限已被拒绝，请在浏览器设置中允许。', 'error');
+                    }
+                } else {
+                    event.target.checked = false;
+                    const granted = await requestPermission();
+                    if (!granted && showToast) {
+                        showToast('通知权限未授予，通知功能保持关闭。', 'warning');
+                    }
+                }
+            } else {
+                setEnabled(false);
+                if (showToast) {
+                    showToast('通知功能已禁用。', 'info');
+                }
             }
         });
     }
