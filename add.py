@@ -2,7 +2,7 @@
 import datetime
 import logging
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Set, Tuple
 
 import requests
 from bs4 import BeautifulSoup
@@ -69,6 +69,17 @@ PROVIDER_CONFIGS = {
     },
 }
 
+RENEWAL_URLS = {
+    'vc': 'https://free.vps.vc/vps-renew',
+    'hax': 'https://hax.co.id/vps-renew/',
+    'woiden': 'https://woiden.id/vps-renew/',
+}
+
+TWO_DAY_THRESHOLD = datetime.timedelta(days=2)
+HOURLY_REMINDER_INTERVAL = datetime.timedelta(hours=1)
+
+_expiry_reminder_state: Dict[int, Dict[str, Any]] = {}
+
 _status_tracker: Dict[int, Dict[str, Any]] = {}
 
 
@@ -98,6 +109,239 @@ def _cleanup_tracker(active_ids):
     stale_ids = [vid for vid in _status_tracker.keys() if vid not in active_ids]
     for vid in stale_ids:
         _status_tracker.pop(vid, None)
+
+
+def _cleanup_expiry_tracker(active_ids: Set[int]):
+    stale_ids = [vid for vid in list(_expiry_reminder_state.keys()) if vid not in active_ids]
+    for vid in stale_ids:
+        _expiry_reminder_state.pop(vid, None)
+        try:
+            clear_pending_pwa_notifications(vid, types=('expiry-warning', 'expiry-hourly'))
+        except Exception as exc:
+            logger.exception('Failed to clear pending PWA notifications for removed VPS %s: %s', vid, exc)
+
+
+def _reset_expiry_state(vps_id: int):
+    _expiry_reminder_state.pop(vps_id, None)
+
+
+def _ensure_expiry_state(vps_id: int, expiry_iso: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not expiry_iso:
+        _reset_expiry_state(vps_id)
+        return None
+    state = _expiry_reminder_state.get(vps_id)
+    if state and state.get('expiry_iso') != expiry_iso:
+        try:
+            clear_pending_pwa_notifications(vps_id, types=('expiry-warning', 'expiry-hourly'))
+        except Exception as exc:
+            logger.exception('Failed to clear pending PWA notifications for VPS %s: %s', vps_id, exc)
+        state = None
+    if state is None:
+        state = {
+            'expiry_iso': expiry_iso,
+            'urgent': False,
+            'last_slot_index': None,
+            'last_notification_at': None,
+            'last_remaining_seconds': None,
+            'initial_seeded': False,
+        }
+        _expiry_reminder_state[vps_id] = state
+    return state
+
+
+def _resolve_renewal_url(provider_key: Optional[str]) -> Optional[str]:
+    if not provider_key:
+        return None
+    key = str(provider_key).strip().lower()
+    return RENEWAL_URLS.get(key)
+
+
+def _format_remaining_time(delta: datetime.timedelta) -> Tuple[str, int]:
+    if delta is None:
+        return '', 0
+    total_seconds = int(delta.total_seconds())
+    if total_seconds <= 0:
+        return '不足 1 分钟', 0
+    days, remainder = divmod(total_seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes = remainder // 60
+    parts = []
+    if days:
+        parts.append(f'{days} 天')
+    if hours:
+        parts.append(f'{hours} 小时')
+    if not days and minutes:
+        parts.append(f'{minutes} 分钟')
+    text = '约 ' + ' '.join(parts) if parts else '不足 1 分钟'
+    return text, total_seconds
+
+
+def _clear_expiry_notifications(vps_id: int, *notification_types: str):
+    try:
+        if notification_types:
+            clear_pending_pwa_notifications(vps_id, notification_types)
+        else:
+            clear_pending_pwa_notifications(vps_id)
+    except Exception as exc:
+        logger.exception('Failed to clear pending PWA notifications for VPS %s: %s', vps_id, exc)
+
+
+def _schedule_initial_expiry_notification(
+    vps_id: int,
+    display_name: str,
+    provider_display: str,
+    pretty_time: str,
+    expiry_dt: datetime.datetime,
+    expiry_iso: str,
+    renew_url: Optional[str],
+    state: Optional[Dict[str, Any]] = None,
+):
+    if state is not None and not state.get('initial_seeded'):
+        _clear_expiry_notifications(vps_id, 'expiry-warning')
+        state['initial_seeded'] = True
+
+    schedule_point = expiry_dt - TWO_DAY_THRESHOLD
+    remaining_text, remaining_seconds = _format_remaining_time(TWO_DAY_THRESHOLD)
+    title = f'{display_name}：{remaining_text} 后到期' if remaining_text else f'{display_name} 即将到期'
+    body_lines = [
+        f'服务商：{provider_display}',
+        f'名称：{display_name}',
+        f'到期时间：{pretty_time}',
+    ]
+    if remaining_text:
+        body_lines.append(f'剩余时间：{remaining_text}')
+    body_lines.append('提醒：距离到期仅剩 48 小时，请尽快续期。')
+    if renew_url:
+        body_lines.append(f'续期地址：{renew_url}')
+
+    data = {
+        'type': 'expiry-warning',
+        'reminderType': 'expiry-warning',
+        'vpsId': vps_id,
+        'provider': provider_display,
+        'expiryIso': expiry_iso,
+        'expiryDisplay': pretty_time,
+        'remainingSeconds': remaining_seconds,
+        'scheduledFor': schedule_point.isoformat(),
+    }
+    if renew_url:
+        data['renewUrl'] = renew_url
+
+    options = {
+        'body': '\n'.join(body_lines),
+        'icon': '/icons/app-icon-192.png',
+        'badge': '/icons/app-icon-96.png',
+        'tag': f'expiry-{vps_id}',
+        'requireInteraction': True,
+        'data': data,
+        'actions': [
+            {'action': 'open', 'title': '打开监控面板'},
+        ],
+    }
+
+    dedupe_key = f'expiry-warning:{vps_id}:{expiry_iso}'
+    try:
+        queue_pwa_notification(
+            vps_id,
+            'expiry-warning',
+            title,
+            options,
+            scheduled_for=schedule_point,
+            dedupe_key=dedupe_key,
+        )
+    except Exception as exc:
+        logger.exception('Failed to queue 2-day PWA notification for VPS %s: %s', vps_id, exc)
+
+
+def _schedule_hourly_expiry_notification(
+    vps_id: int,
+    display_name: str,
+    provider_display: str,
+    provider_key: str,
+    name_label: str,
+    pretty_time: str,
+    expiry_dt: datetime.datetime,
+    expiry_iso: str,
+    renew_url: Optional[str],
+    now_utc: datetime.datetime,
+    state: Optional[Dict[str, Any]],
+    time_until_expiry: datetime.timedelta,
+):
+    start_time = expiry_dt - TWO_DAY_THRESHOLD
+    if now_utc < start_time:
+        return
+
+    elapsed_seconds = int((now_utc - start_time).total_seconds())
+    interval_seconds = int(HOURLY_REMINDER_INTERVAL.total_seconds()) or 3600
+    slot_index = elapsed_seconds // interval_seconds if elapsed_seconds >= 0 else 0
+
+    if state and state.get('last_slot_index') == slot_index:
+        return
+
+    slot_time = start_time + datetime.timedelta(hours=slot_index)
+    remaining_text, remaining_seconds = _format_remaining_time(time_until_expiry)
+    title = f'{display_name}：剩余 {remaining_text}' if remaining_text else f'{display_name} 即将到期'
+
+    body_lines = [
+        f'服务商：{provider_display}',
+        f'名称：{display_name}',
+        f'到期时间：{pretty_time}',
+    ]
+    if remaining_text:
+        body_lines.append(f'剩余时间：{remaining_text}')
+    else:
+        body_lines.append('剩余时间：不足 1 分钟')
+    body_lines.append('请尽快续期以保持服务正常运行。')
+    if renew_url:
+        body_lines.append(f'续期地址：{renew_url}')
+
+    data = {
+        'type': 'expiry-hourly',
+        'reminderType': 'expiry-hourly',
+        'vpsId': vps_id,
+        'provider': provider_display,
+        'providerKey': provider_key,
+        'name': name_label or display_name,
+        'expiryIso': expiry_iso,
+        'expiryDisplay': pretty_time,
+        'remainingSeconds': remaining_seconds,
+        'reminderSlot': slot_index,
+        'scheduledFor': slot_time.isoformat(),
+        'urgent': True,
+    }
+    if renew_url:
+        data['renewUrl'] = renew_url
+
+    options = {
+        'body': '\n'.join(body_lines),
+        'icon': '/icons/app-icon-192.png',
+        'badge': '/icons/app-icon-96.png',
+        'tag': f'expiry-{vps_id}',
+        'requireInteraction': True,
+        'data': data,
+        'actions': [
+            {'action': 'open', 'title': '打开监控面板'},
+        ],
+    }
+
+    dedupe_key = f'expiry-hourly:{vps_id}:{expiry_iso}:{slot_index}'
+    try:
+        queue_pwa_notification(
+            vps_id,
+            'expiry-hourly',
+            title,
+            options,
+            scheduled_for=slot_time,
+            dedupe_key=dedupe_key,
+        )
+    except Exception as exc:
+        logger.exception('Failed to queue hourly PWA notification for VPS %s: %s', vps_id, exc)
+    else:
+        if state is not None:
+            state['urgent'] = True
+            state['last_slot_index'] = slot_index
+            state['last_notification_at'] = slot_time
+            state['last_remaining_seconds'] = remaining_seconds
 
 
 def _is_new_vps(vps, entry: Dict[str, Any]) -> bool:
@@ -388,87 +632,110 @@ def updateVPS(list):
 
 
 def checkDateTime():
-    res = selectSql()
-    if not res:
+    try:
+        res = selectSql()
+    except Exception as exc:
+        logger.exception('Failed to query VPS list for expiry notifications: %s', exc)
         return
+
+    active_ids: Set[int] = set()
+    if not res:
+        _cleanup_expiry_tracker(active_ids)
+        return
+
     try:
         for vps in res:
-            expiry_dt, expiry_iso, expiry_display = resolve_expiry_values(
-                vps['creation_date'], vps['valid_until'], vps['expiry_utc']
-            )
-            if expiry_iso and vps['expiry_utc'] != expiry_iso:
-                update_expiry_utc(vps['id'], expiry_iso)
-            if expiry_dt is None:
+            vps_id = None
+            try:
+                vps_id = vps['id']
+            except (TypeError, KeyError, IndexError):
+                logger.warning('Skipping malformed VPS record for expiry reminder: %s', vps)
                 continue
-            now_utc = datetime.datetime.now(datetime.timezone.utc)
-            if expiry_dt <= now_utc:
-                continue
-            delta_time = expiry_dt - now_utc
 
-            ops_label = vps['ops'] or ''
-            name_label = vps['name'] or ''
-            pretty_time = expiry_display or format_malaysia_display(expiry_dt)
+            active_ids.add(vps_id)
 
             try:
-                schedule_point = expiry_dt - datetime.timedelta(days=2)
-                dedupe_key = f"expiry:{vps['id']}:{expiry_dt.isoformat()}"
-                total_seconds = max(delta_time.total_seconds(), 0)
-                remaining_days = int((total_seconds + 86399) // 86400)
-                if remaining_days <= 0 and total_seconds > 0:
-                    remaining_days = 1
-                remaining_text = f'{remaining_days} 天' if remaining_days > 0 else '不足 1 天'
-                provider_display = str(ops_label).upper() if ops_label else '未知'
-                display_name = name_label or provider_display or '未命名'
-                body_lines = [
-                    f'服务商：{provider_display}',
-                    f'名称：{name_label or "未命名"}',
-                    f'到期时间：{pretty_time}',
-                    f'剩余时间：约 {remaining_text}',
-                ]
-                notification_options = {
-                    'body': '\n'.join(body_lines),
-                    'icon': '/icons/app-icon-192.png',
-                    'badge': '/icons/app-icon-96.png',
-                    'tag': f'expiry-{vps["id"]}',
-                    'requireInteraction': True,
-                    'data': {
-                        'type': 'expiry',
-                        'vpsId': vps['id'],
-                        'provider': ops_label,
-                        'name': name_label,
-                        'expiryIso': expiry_iso,
-                        'expiryDisplay': pretty_time,
-                    },
-                    'actions': [
-                        {'action': 'open', 'title': '查看监控'}
-                    ],
-                }
-                queue_pwa_notification(
-                    vps['id'],
-                    'expiry-warning',
-                    f'VPS 到期提醒：{display_name}',
-                    notification_options,
-                    scheduled_for=schedule_point,
-                    dedupe_key=dedupe_key,
+                expiry_dt, expiry_iso, expiry_display = resolve_expiry_values(
+                    vps['creation_date'], vps['valid_until'], vps['expiry_utc']
                 )
-            except Exception as exc:
-                logger.exception('Failed to queue PWA notification for VPS %s: %s', vps['id'], exc)
+                if expiry_iso and vps['expiry_utc'] != expiry_iso:
+                    update_expiry_utc(vps_id, expiry_iso)
 
-            if datetime.timedelta(days=0) < delta_time <= datetime.timedelta(days=3):
-                vps_type = str(ops_label).lower()
-                message = (
-                    f"你的{ops_label}小鸡\n"
-                    f"名称:{name_label}即将到期\n"
-                    f"到期时间为{pretty_time}\n"
-                    f"距离到期还剩下{delta_time}\n"
-                )
-                if vps_type == "vc":
-                    sendMsg(vps['id'], f"{message}[Renew](https://free.vps.vc/vps-renew)", "Markdown")
-                elif vps_type == "hax":
-                    sendMsg(vps['id'], f"{message}[Renew](https://hax.co.id/vps-renew/)", "Markdown")
-                elif vps_type == "woiden":
-                    sendMsg(vps['id'], f"{message}[Renew](https://woiden.id/vps-renew/)", "Markdown")
+                state = _ensure_expiry_state(vps_id, expiry_iso)
+
+                if expiry_dt is None or not expiry_iso:
+                    if state is not None:
+                        _clear_expiry_notifications(vps_id, 'expiry-warning', 'expiry-hourly')
+                        _reset_expiry_state(vps_id)
+                    continue
+
+                now_utc = datetime.datetime.now(datetime.timezone.utc)
+                time_until_expiry = expiry_dt - now_utc
+                if time_until_expiry <= datetime.timedelta(0):
+                    _clear_expiry_notifications(vps_id, 'expiry-warning', 'expiry-hourly')
+                    _reset_expiry_state(vps_id)
+                    continue
+
+                ops_label = vps['ops'] or ''
+                provider_key = str(ops_label).strip().lower()
+                provider_display = ops_label.upper() if ops_label else '未知'
+                name_label = vps['name'] or ''
+                display_name = name_label or provider_display or '未命名'
+                pretty_time = expiry_display or format_malaysia_display(expiry_dt)
+                renew_url = _resolve_renewal_url(provider_key)
+
+                if time_until_expiry > TWO_DAY_THRESHOLD:
+                    _schedule_initial_expiry_notification(
+                        vps_id,
+                        display_name,
+                        provider_display,
+                        pretty_time,
+                        expiry_dt,
+                        expiry_iso,
+                        renew_url,
+                        state,
+                    )
+                    if state and state.get('urgent'):
+                        _clear_expiry_notifications(vps_id, 'expiry-hourly')
+                    if state:
+                        state['urgent'] = False
+                        state['last_slot_index'] = None
+                        state['last_notification_at'] = None
+                        state.pop('last_remaining_seconds', None)
                 else:
-                    sendMsg(vps['id'], "出问题了咯，请检查看看")
-    except Exception:
-        pass
+                    if state is None:
+                        state = _ensure_expiry_state(vps_id, expiry_iso)
+                    _schedule_hourly_expiry_notification(
+                        vps_id,
+                        display_name,
+                        provider_display,
+                        provider_key,
+                        name_label,
+                        pretty_time,
+                        expiry_dt,
+                        expiry_iso,
+                        renew_url,
+                        now_utc,
+                        state,
+                        time_until_expiry,
+                    )
+
+                if datetime.timedelta(days=0) < time_until_expiry <= datetime.timedelta(days=3):
+                    message = (
+                        f"你的{ops_label}小鸡\n"
+                        f"名称:{name_label}即将到期\n"
+                        f"到期时间为{pretty_time}\n"
+                        f"距离到期还剩下{time_until_expiry}\n"
+                    )
+                    if provider_key == "vc":
+                        sendMsg(vps_id, f"{message}[Renew](https://free.vps.vc/vps-renew)", "Markdown")
+                    elif provider_key == "hax":
+                        sendMsg(vps_id, f"{message}[Renew](https://hax.co.id/vps-renew/)", "Markdown")
+                    elif provider_key == "woiden":
+                        sendMsg(vps_id, f"{message}[Renew](https://woiden.id/vps-renew/)", "Markdown")
+                    else:
+                        sendMsg(vps_id, "出问题了咯，请检查看看")
+            except Exception as exc:
+                logger.exception('Failed to process expiry reminder for VPS %s: %s', vps_id, exc)
+    finally:
+        _cleanup_expiry_tracker(active_ids)

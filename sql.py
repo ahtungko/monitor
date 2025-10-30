@@ -463,3 +463,39 @@ def mark_pwa_notifications_delivered(ids):
         return cursor.rowcount
     finally:
         conn.close()
+
+
+def clear_pending_pwa_notifications(monitor_id, types=None):
+    if monitor_id is None:
+        return 0
+
+    clean_types = None
+    if types:
+        if isinstance(types, str):
+            candidates = [types]
+        else:
+            candidates = list(types)
+        filtered = []
+        for value in candidates:
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                filtered.append(text)
+        if filtered:
+            clean_types = filtered
+
+    conn = connSqlite()
+    try:
+        cursor = conn.cursor()
+        params = [monitor_id]
+        query = 'DELETE FROM pwa_notifications WHERE monitor_id=? AND delivered_at IS NULL'
+        if clean_types:
+            placeholders = ','.join('?' for _ in clean_types)
+            query += f' AND type IN ({placeholders})'
+            params.extend(clean_types)
+        cursor.execute(query, params)
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
